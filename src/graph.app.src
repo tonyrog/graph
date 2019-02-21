@@ -1,0 +1,6 @@
+{application, graph,
+ [{description, "graph library"},
+  {vsn, git},
+  {env, []},
+  {applications,[kernel,stdlib]}
+  ]}.
