@@ -8,75 +8,91 @@
 -module(graph).
 
 -export([new/0, new/1]).
--export([save/1, save/2]).
--export([load/1, load_fd/1, load_fd/2]).
--export([show/1, open/1]).
+
 -export([is_graph/1, is_digraph/1]).
 -export([from_edge_list/1]).
+-export([from_undirected_edge_list/1]).
+-export([to_edge_list/1]).
 -export([from_neighbour_list/1]).
+-export([from_undirected_neighbour_list/1]).
+-export([to_neighbour_list/1]).
 -export([from_connection_matrix/1]).
--export([put_edge/3, put_edge/4, update_edge/4, is_edge/3]).
--export([remove_edge/3]).
--export([edges/1]).
--export([number_of_edges/1]).
--export([fold_edges/3]).
--export([get_edge_value/3]).
--export([get_edge_value/4]).
--export([set_edge_value/4]).
 
--export([put_vertex/2, put_vertex/3, update_vertex/3, is_vertex/2]).
+-export([is_vertex/2]).
+-export([put_vertex/2, put_vertex/3]).
+-export([get_vertex/2, get_vertex/3, get_vertex/4]).
 -export([remove_vertex/2]).
 -export([vertices/1]).
 -export([number_of_vertices/1]).
 -export([fold_vertices/3]).
--export([get_vertex_value/3]).
--export([get_vertex_value/4]).
--export([set_vertex_value/4]).
--export([set_vertex_values/3]).
 
--export([fold_out_edges/4]).
+-export([is_edge/2, is_edge/3, edge/2, edge/3]).
+-export([put_edge/3, put_edge/4]).
+-export([remove_edge/2, remove_edge/3]).
+-export([edges/1]).
+-export([number_of_edges/1]).
+-export([fold_edges/3]).
+-export([get_edge/2, get_edge/3, get_edge/4, get_edge/5]).
+
+-export([fold_out/4]).
 -export([out_neighbours/2]).
 -export([out_edges/2]).
 -export([fanout/2]).
 
--export([fold_in_edges/4]).
+-export([fold_in/4]).
 -export([in_neighbours/2]).
 -export([in_edges/2]).
 -export([fanin/2]).
 
--export([dijkstra/2]).
--export([valency_sum_sequence_xlabel/2,
-	 valency_sum_sequence/1,
-	 valency_sum_sequence/2]).
+%% internal edge/vertex attributes
+-define(ID,   '$id').
+-define(TYPE, '$type').
+-define(IN,   '$in').
+-define(OUT,  '$out').
+-define(PT1,  '$pt1').
+-define(PT2,  '$pt2').
 
+%%
+%% Vertex
+%%    Key        Value
+%%    a          #{ id=>a, out=>[{b,e1},{c,e2}], in=>[{a,e1},{d,e3}] }
+%%    b          #{ id=>b  }
+%%    c          #{ id=>c }
+%%    d          #{ id=>d }
+%%
 %% edge key is either:
-%%  [a,b,out] for real existing directed edge
-%%  [b,a,in]  for non existing (reversed edge)
-%% 
--record(graph,
-	{
-	  is_digraph = true :: boolean(),
-	  e :: map(),  %% map of edges E -> term()
-	  v :: map()   %% map of vertices V -> term()
-	}).
-
--define(is_graph(G), is_map(G)).
+%% UNDIRECTED graph
+%%    Key        Value
+%%    e1         #{ id=>e1, pt1=>a, pt2=>b     (a < b)
+%%    e2         #{ id=>e2, pt1=>b, pt2=>c     (b < c)
+%%
+%% DIRECTED graph
+%%    Key        Value
+%%    e1         #{ id=e1, pt1 => a, pt2 => b
+%%    e2         #{ id=e2, pt1 => a, pt2 => c
+%%    e3         #{ id=e3, pt1 => d, pt2 => b
+%%
+%%
 
 new() ->
     new(true).
 
 new(Digraph) when is_boolean(Digraph) ->
-    #{ type => graph,
+    #{ ?TYPE => graph,
        is_digraph => Digraph,
        e => #{},
        v => #{}
      }.
 
-is_graph(#{ type := graph }) -> true;
+is_graph(#{ ?TYPE := graph }) -> true;
 is_graph(_) -> false.
 
-is_digraph(#{ type := graph, is_digraph := true }) -> true;
+is_digraph(#{ ?TYPE := graph, is_digraph := true }) -> true;
 is_digraph(_) -> false.
+
+sort(A,B,true) -> {A,B};
+sort(A,B,_) when A =< B ->  {A,B};
+sort(A,B,_) -> {B,A}.
 
 %%
 %% Construct graph from list of edges 
@@ -86,15 +102,33 @@ is_digraph(_) -> false.
 from_edge_list(Es) ->
     from_edge_list_(Es, new()).
 
+from_undirected_edge_list(Es) ->
+    from_edge_list_(Es, new(false)).
+
 from_edge_list_([{A,B} | Es], G) ->
     from_edge_list_(Es, put_edge(A, B, G));
-from_edge_list_([{A,B,Props} | Es], G) ->
-    from_edge_list_(Es, put_edge(A, B, Props, G));
+from_edge_list_([{A,B,E} | Es], G) ->
+    from_edge_list_(Es, put_edge(A,B,E,[],G));
+from_edge_list_([{A,B,E,EProps} | Es], G) ->
+    from_edge_list_(Es, put_edge(A,B,E,EProps,G));
 from_edge_list_([], G) ->
     G.
 
+to_edge_list(G) ->
+    fold_edges(
+      fun(V,W,E,Acc) -> 
+	      if is_reference(E) ->
+		      [{V,W}|Acc];
+		 true ->
+		      [{V,W,E}|Acc]
+	      end
+      end, [], G).
+
 from_neighbour_list(Ns) ->
     from_neighbour_list_(Ns, new()).
+
+from_undirected_neighbour_list(Ns) ->
+    from_neighbour_list_(Ns, new(false)).
 
 from_neighbour_list_([{V,Vs}|Ns], G) when is_list(Vs) ->
     G1 = from_edge_list_([ {V, W} || W <- Vs ], G),
@@ -127,465 +161,347 @@ from_connection_matrix_([Vj|Vs], J, Rs, I, N, G) ->
 from_connection_matrix_([], _J, Rs, I, N, G) ->
     from_connection_matrix_(Rs, I+1, N, G).
 
-put_edge(A, B, G) when ?is_graph(G) ->
-    case is_edge(A,B,G) of
-	true ->
+to_neighbour_list(G) ->
+    fold_vertices(
+      fun(V,Ai) ->
+	      Ns = out_neighbours(V, G),
+	      case get_vertex(V,G) of
+		  [] -> [{V,Ns} | Ai];
+		  VProps -> [{V,VProps,Ns} | Ai]
+	      end
+      end, [], G).
+
+put_edge(E,Props,G=#{?TYPE:=graph,e:=Es}) when is_list(Props) ->
+    Es1 = add_edge_props_(E, Props, Es),
+    G# { e => Es1 };
+put_edge(A0,B0,G=#{ ?TYPE:=graph,is_digraph:=Digraph}) ->
+    {A,B} = sort(A0,B0,Digraph),
+    case edge(A,B,G) of
+	{_AorB,_E} ->
 	    G;
 	false ->
-	    Es0 = G#graph.e,
-	    case maps:is_key([A,B,in], Es0) of
-		true ->
-		    Es1 = maps:remove([A,B,in], Es0),
-		    Es2 = maps:put([A,B,out], [], Es1),
-		    G#graph { e = Es2 };
-		false ->
-		    put_edge(A,B,[],G)    
+	    insert_edge_(A,B,make_ref(),[],G)
+    end.
+	    
+put_edge(A0,B0,Props,G=#{ ?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
+    {A,B} = sort(A0,B0,Digraph),
+    case edge(A,B,G) of
+	{_AorB,E} ->
+	    Es1 = add_edge_props_(E,Props,Es),
+	    G#{ e => Es1 };
+	false ->
+	    insert_edge_(A,B,make_ref(),Props,G)
+    end.
+
+%% put edge given a edge id! if edge id already exist it must be 
+%% removed before added or perhaps just update properties.
+
+put_edge(A0,B0,E,Props,G = #{?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
+    {A,B} = sort(A0,B0,Digraph),
+    case maps:find(E,Es) of
+	error ->
+	    insert_edge_(A,B,E,Props,G);
+	{ok,Ex} ->
+	    case Ex of
+		#{ ?PT1 := A, ?PT2 := B } -> %% keep edge
+		    Es1 = add_edge_props_(E,Props,Es),
+		    G#{ e => Es1 };		    
+		_ ->
+		    %% remove edge and add it again
+		    G1 = remove_edge(E, G),
+		    Ex1 = Ex#{ ?TYPE=>edge,?ID=>E,?PT1=>A,?PT2=>B},
+		    add_edge_(A,B,E,Ex1,Props,G1)
 	    end
     end.
 
-put_edge(A,B,Props,G) when ?is_graph(G) ->
-    try update_edge(A,B,Props,G) of
-	G1 -> G1
-    catch
-	error:badarg ->
-	    G1 = put_vertex(A, G),
-	    G2 = put_vertex(B, G1),
-	    Es0 = G2#graph.e,
-	    X = if G#graph.is_digraph -> in; true -> out end,
-	    Es1 = maps:put([A,B,out],Props,Es0),
-	    Es2 = maps:put([B,A,X],Props,Es1),
-	    G2#graph { e = Es2 }
-    end.
+insert_edge_(A,B,E,Props,G=#{?TYPE:=graph}) ->
+    Ex = #{ ?TYPE=>edge,?ID=>E,?PT1=>A,?PT2=>B},
+    add_edge_(A,B,E,Ex,Props,G).
 
-update_edge(A, B, List, G = #{ type := graph, e := E, is_digraph:=Digraph }) ->
-    Es = maps:update([A,B,out], List, E),
-    Es1 = if Digraph -> Es;
-	     true -> maps:update([B,A,out], List, Es)
+add_edge_(A,B,E,Ex,Props0,G=#{?TYPE:=graph,e:=Es0,v:=Vs0}) ->
+    Ax = put_vertex_(A,[],Vs0),
+    Ax1 = add_edge_out_({B,E}, Ax),
+    Bx = put_vertex_(B,[],Vs0),
+    Bx1 = add_edge_in_({A,E}, Bx),
+    Ex1 = if Props0 =:= [] -> Ex;
+	     true -> 
+		  Props = filter_props(Props0),
+		  maps:merge(Ex, maps:from_list(Props))
 	  end,
-    G#graph { e = Es1 }.
+    G#{ v => Vs0# { A => Ax1, B => Bx1 }, e => Es0#{ E => Ex1} }.
 
-remove_edge(A, B, G = #{ type:=graph,e := E,is_digraph:=Digraph }) ->
-    try maps:remove([A,B,out], E) of
-	Es ->
-	    Es1 = if Digraph -> Es;
-		     true -> maps:remove([B,A,out], Es)
-		  end,
-	    G#{ e => Es1 }
-    catch
-	error:badarg ->
-	    G
+%% merge edge properties only
+add_edge_props_(E, Props0, Es) ->
+    Ex = maps:get(E, Es),
+    Props = filter_props(Props0),
+    Ex1 = maps:merge(Ex, maps:from_list(Props)),
+    Es# { E => Ex1 }.
+
+is_edge(E,#{ ?TYPE :=graph, e:=Es}) ->
+    maps:is_key(E, Es).
+
+is_edge(A,B,G) ->
+    case edge(A,B,G) of
+	false -> false;
+	_ -> true
     end.
 
-is_edge(A, B, #{ type := graph, e := E}) ->
-    maps:is_key([A,B,out], E).
+edge(A,B, #{ ?TYPE := graph, v := Vs, is_digraph:=Digraph}) ->
+    edge(sort(A,B,Digraph), Vs).
 
-edges(G) ->
-    maps:fold(fun([V,W,out],_,Acc) -> [{V,W}|Acc];
-		 (_,_,Acc) -> Acc
-	      end,
-	      [], G#graph.e).
+edge({A,B}, Vs) ->
+    case maps:find(A, Vs) of
+	error -> false;
+	{ok,Vx} ->
+	    Out = vertex_out_(Vx),
+	    lists:keyfind(B,1,Out)
+    end.
+    
+edges(#{ ?TYPE := graph, e := Es}) ->
+    maps:keys(Es).
 
-number_of_edges(G) ->
-    maps:size(G#graph.e).
+number_of_edges(#{ ?TYPE := graph, e:=Es }) ->
+    maps:size(Es).
 
-fold_edges(Fun, Acc0, G) ->
-    maps:fold(fun([V,W,out],_Attr,Acc1) -> Fun(V,W,Acc1);
-		  ([_V,_W,in],_Attr,Acc1) -> Acc1
-	       end, Acc0, G#graph.e).
+fold_edges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
+    maps:fold(fun(E,Ex,Ai) ->
+		      #{ ?PT1 := V, ?PT2 := W } = Ex,
+		      Fun(V,W,E,Ai) 
+	      end, Acc, Es).
 
-get_edge_value({V,W}, Key, G) when ?is_graph(G) ->
-    List = maps:get([V,W,out], G#graph.e),
-    proplists:get_value(Key,  List).
+get_edge(E, #{?TYPE:=graph,e:=Es}) ->
+    Ex = maps:get(E, Es),
+    filter_props(maps:to_list(Ex)).
 
-get_edge_value({V,W}, Key, G, Default) when ?is_graph(G) ->
-    List = maps:get([V,W,out], G#graph.e),
-    proplists:get_value(Key,  List, Default).
+get_edge(E, Key, #{?TYPE:=graph,e:=Es}) ->
+    Ex = maps:get(E, Es),
+    maps:get(Key,Ex).
 
-set_edge_value({V,W}, Key, Value, G) when ?is_graph(G) ->
-    List0 =  maps:get([V,W,out], G#graph.e),
-    List1 = case lists:keytake(Key, 1, List0) of
-		false -> [{Key,Value}|List0];
-		{value,_,L} -> [{Key,Value}|L]
-	    end,
-    update_edge(V, W, List1, G).
+get_edge(A0,B0,Key,#{?TYPE:=graph,e:=Es,v:=Vs,is_digraph:=Digraph}) ->
+    {A,B} = sort(A0,B0,Digraph),
+    Ax = maps:get(A,Vs),
+    Out = vertex_out_(Ax),
+    case lists:keyfind(B,1,Out) of
+	{B,E} ->
+	    Ex = maps:get(E,Es),
+	    maps:get(Key,Ex)
+    end.
 
+get_edge(A0,B0,Key,#{?TYPE:=graph,e:=Es,v:=Vs,is_digraph:=Digraph},Default) ->
+    {A,B} = sort(A0,B0,Digraph),
+    Ax = maps:get(A,Vs),
+    Out = vertex_out_(Ax),
+    case lists:keyfind(B,1,Out) of
+	{B,E} ->
+	    Ex = maps:get(E,Es),
+	    maps:get(Key,Ex,Default)
+    end.
 
 %% @doc
 %% Return a list of "out" neighbours of G, that is
 %% vertices w such that {v,w} is an edge in G.
 %% @end
 
-fold_out_edges(Fun, Acc, V, G=#{type:=graph,e:=E}) ->
-    fold_out_edges_(Fun, Acc, maps:interator(E), V, G).
-
-fold_out_edges_(Fun, Acc, I, V, G) when ?is_graph(G) ->
-    case maps:next(I) of
-	none -> Acc;
-	{[V,W,out],_Value,I1} ->
-	    fold_out_edges_(Fun, Fun(V,W,Acc), I1, V, G);
-	{[V,_,in],_Value,I1} ->
-	    fold_out_edges_(Fun, Acc, I1, V, G);
-	{_, _, I1} ->
-	    fold_out_edges_(Fun, Acc, I1, V, G)
+fold_out(Fun, Acc, V, #{?TYPE:=graph,v:=Vs,is_digraph:=Digraph}) ->
+    Vx = maps:get(V, Vs),
+    case Digraph of
+	true ->
+	    lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			Acc, vertex_out_(Vx));
+	false ->
+	    lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			Acc, vertex_out_(Vx) ++ vertex_in_(Vx))
     end.
 
-out_edges(V, G) when ?is_graph(G) ->
-    fold_out_edges(fun(_V,W,Acc) -> [{V,W}|Acc] end, [], V, G).
+out_edges(V, G = #{?TYPE:=graph}) ->
+    fold_out(fun(Vi,W,_E,Acc) -> [{Vi,W}|Acc] end, [], V, G).
 
-out_neighbours(V, G) when ?is_graph(G) ->
-    fold_out_edges(fun(_V,W,Acc) -> [W|Acc] end, [], V, G).
+out_neighbours(V, G = #{?TYPE:=graph}) ->
+    fold_out(fun(Vi,W,_E,Acc) ->
+		     if V =:= Vi -> [W|Acc];
+			true -> [Vi|Acc]
+		     end
+	     end, [], V, G).
 
-fanout(V, G) when ?is_graph(G) ->
-    fold_out_edges(fun(_V,_W,N) -> N+1 end, 0, V, G).
+fanout(V, #{?TYPE:=graph, v:=Vs, is_digraph:=Digraph}) ->
+    Vx = maps:get(V, Vs),
+    case Digraph of
+	true -> length(vertex_out_(Vx));
+	false ->length(vertex_out_(Vx)) +
+		    length(vertex_in_(Vx))
+    end.
 
 %% @doc
 %% Return a list of "in" neighbours of G, that is
 %% vertices w such that {w,v} is an edge in G
 %% @end
 
-fold_in_edges(Fun, Acc, V, G=#{ type:=graph, e:=E}) ->
-    fold_in_edges_(Fun, Acc, maps:iterator(E), V, G).
-
-fold_in_edges_(Fun, Acc, I, V, G=#{type:=graph,e:=E,is_digrapg:=Digraph}) ->
-    case maps:next(I) of
-	none -> Acc;
-	{[V,W,_],_Value,I1} ->
-	    if Digraph ->
-		    case maps:is_key([W,V,out],E) of
-			true  -> 
-			    fold_in_edges_(Fun,Fun(W,V,Acc),I1,V,G);
-			false -> 
-			    fold_in_edges_(Fun,Acc,I1,V,G)
-		    end;
-	       true ->
-		    fold_in_edges_(Fun,Fun(W,V,Acc),I1,V,G)
-	    end;
-	{_, _, I1} ->
-	    fold_in_edges_(Fun,Acc,I1,V,G)
+fold_in(Fun, Acc, V, #{?TYPE:=graph,v:=Vs,is_digraph:=Digraph}) ->
+    Vx = maps:get(V, Vs),
+    case Digraph of
+	true ->	
+	    lists:foldl(fun({W,E},Ai) -> Fun(W,V,E,Ai) end, 
+			Acc, vertex_in_(Vx));
+	false ->
+	    lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			Acc, vertex_out_(Vx) ++ vertex_in_(Vx))
     end.
 
+in_edges(V, G = #{?TYPE:=graph}) ->
+    fold_in(fun(W,Vi,_E,Acc) ->
+		    if Vi =:= V -> [{W,Vi}|Acc];
+		       true -> [{Vi,W}|Acc]
+		    end
+	    end, [], V, G).
 
-in_edges(V, G) when ?is_graph(G) ->
-    fold_in_edges(fun(W,_V,Acc) -> [{W,V}|Acc] end, [], V, G).
+in_neighbours(V, G = #{?TYPE:=graph}) ->
+    fold_in(fun(W,Vi,_E,Acc) ->
+		    if Vi =:= V -> [W|Acc];
+		       true -> [Vi|Acc]
+		    end
+	    end, [], V, G).
 
-in_neighbours(V, G) when ?is_graph(G) ->
-    fold_in_edges(fun(W,_V,Acc) -> [W|Acc] end, [], V, G).
-
-fanin(V, G) when ?is_graph(G) ->
-    fold_in_edges(fun(_V,_W,N) -> N+1 end, 0, V, G).
+fanin(V, #{?TYPE:=graph, v:=Vs, is_digraph:=Digraph}) ->
+    Vx = maps:get(V, Vs),
+    case Digraph of
+	true ->
+	    length(vertex_in_(Vx));
+	false ->
+	    length(vertex_in_(Vx)) + length(vertex_out_(Vx))
+    end.
 
 %%
 %% Vertices
 %%
 
-put_vertex(V, G) when ?is_graph(G) ->
-    case is_vertex(V, G) of
-	true -> G;
-	false -> put_vertex(V, [], G)
-    end.
+is_vertex(V, #{ ?TYPE := graph, v := Vs}) ->
+    maps:is_key(V, Vs).
 
-put_vertex(V, List, G) when ?is_graph(G), is_list(List) ->
-    Vs = maps:put(V, List, G#graph.v),
-    G#graph { v = Vs }.
+put_vertex(V, G) ->
+    put_vertex(V, [], G).
 
-update_vertex(V, List, G) when ?is_graph(G), is_list(List) ->
-    Vs = maps:update(V, List, G#graph.v),
-    G#graph { v = Vs }.
+put_vertex(V, Props, G = #{ ?TYPE := graph, v := Vs0}) when is_list(Props) ->
+    Vx1 = put_vertex_(V, Props, Vs0),
+    G# { v => Vs0#{ V => Vx1 }}.
 
-get_vertex_value(V, Key, G) when ?is_graph(G) ->
-    List = maps:get(V, G#graph.v),
-    proplists:get_value(Key,  List).
-
-get_vertex_value(V, Key, G, Default) when ?is_graph(G) ->
-    List = maps:get(V, G#graph.v),
-    proplists:get_value(Key,  List, Default).
-
-set_vertex_value(V, Key, Value, G) when ?is_graph(G) ->
-    L0 =  maps:get(V, G#graph.v),
-    L1 = case lists:keytake(Key, 1, L0) of
-	     false -> [{Key,Value}|L0];
-	     {value,_,L} -> [{Key,Value}|L]
+put_vertex_(V, Props0, Vs) ->
+    Props = filter_props(Props0),
+    Vx = case maps:find(V, Vs) of
+	     error -> #{ ?ID => V, ?TYPE => vertex, ?IN => [], ?OUT => [] };
+	     {ok,Vx0} -> Vx0
 	 end,
-    update_vertex(V, L1, G).
+    maps:merge(Vx, maps:from_list(Props)).
 
-set_vertex_values(V, KVs, G) when ?is_graph(G), is_list(KVs) ->
-    L0 = maps:get(V, G#graph.v),
-    L1 = lists:foldl(
-	   fun(Kv={Key,_Value},Li) ->
-		   case lists:keytake(Key, 1, Li) of
-		       false -> [Kv|Li];
-		       {value,_,L} -> [Kv|L]
-		   end
-	   end, L0, KVs),
-    update_vertex(V, L1, G).
+get_vertex(V, #{ ?TYPE := graph, v := Vs}) ->
+    filter_props(maps:to_list(maps:get(V, Vs))).
 
-remove_vertex(V, G) when ?is_graph(G) ->
-    try maps:remove(V, G#graph.v) of
-	Vs ->
-	    %% this must be improved
-	    Es = maps:fold(
-		   fun(E=[A,B,_], _, Acc) when A =:= V orelse B =:= V -> 
-			   [E|Acc];
-		      (_E, _V, Acc) -> Acc
-		   end, [], G#graph.e),
-	    if Es =:= [] ->
-		 G#graph { v = Vs };   
-	       true ->
-		    Es1 = lists:foldl(fun(E, Esi) ->
-					      maps:remove(E, Esi)
-				      end, G#graph.e, Es),
-		    G#graph { v = Vs, e = Es1 }
-	    end
-    catch
-	error:badarg ->
+get_vertex(V, Key, #{ ?TYPE := graph, v := Vs}) ->
+    Vx = maps:get(V, Vs),
+    maps:get(Key, Vx).
+
+get_vertex(V, Key, #{ ?TYPE := graph, v := Vs}, Default) ->
+    Vx = maps:get(V, Vs),
+    maps:get(Key, Vx, Default).
+
+remove_vertex(V, G = #{ ?TYPE := graph, v := Vs0, e := Es0}) ->
+    Vx = maps:get(V, Vs0),
+    Edges = lists:usort([E||{_W,E} <- vertex_out_(Vx)] ++
+			[E||{_V,E} <- vertex_in_(Vx)]),
+    {Es1,Vs1} = remove_edge_list_(Edges,Es0,Vs0),
+    Vs2 = maps:remove(V, Vs1),
+    G# { e => Es1, v => Vs2 }.
+
+
+remove_edge(E, G = #{ ?TYPE:=graph, e := Es, v := Vs }) ->
+    case maps:is_key(E, Es) of
+	true ->
+	    {Es1,Vs1} = remove_edge_(E, Es, Vs),
+	    G# { e => Es1, v => Vs1 };
+	false ->
 	    G
     end.
 
-is_vertex(V, G) when ?is_graph(G) ->
-    maps:is_key(V, G#graph.v).
-
-vertices(G) when ?is_graph(G) ->
-    maps:keys(G#graph.v).
-
-number_of_vertices(G) when ?is_graph(G) ->
-    maps:size(G#graph.v).
-
-
-fold_vertices(Fun, Acc0, G) when ?is_graph(G) ->
-    maps:fold(fun(V,_Attr,Acc1) -> Fun(V,Acc1) end,
-	      Acc0, G#graph.v).
-
-%% generate frequency (valency sum sequence)
-valency_sum_sequence_xlabel(G, N) ->
-    G1 = valency_sum_sequence(G,N),
-    fold_vertices(
-      fun(V, Gv) ->
-	      Vo = get_vertex_value(V, vo, Gv, []),
-	      Vi = get_vertex_value(V, vi, Gv, []),
-	      Xl = lists:flatten(io_lib:format("-~w+~w", [Vi,Vo])),
-	      set_vertex_value(V, xlabel, Xl, Gv)
-      end, G1, G1).
-
-
-valency_sum_sequence(G,0) ->
-    G;
-valency_sum_sequence(G,I) when is_integer(I), I>0 ->
-    G1 = valency_sum_sequence(G),
-    valency_sum_sequence(G1,I-1).
-
-valency_sum_sequence(G) ->
-    fold_vertices(
-      fun(V, Gv) ->
-	      Vo = 
-		  fold_out_edges(
-		    fun(_V,W,Sum) ->
-			    [S|_] = get_vertex_value(W, vo, G, [1]),
-			    S+Sum
-		    end, 0, V, G),
-	      Vi = fold_in_edges(
-		      fun(_V,W,Sum) ->
-			      [S|_] = get_vertex_value(W, vi, G, [1]),
-			      S+Sum
-		      end, 0, V, G),
-	      Vos = get_vertex_value(V, vo, G, []),
-	      Vis = get_vertex_value(V, vi, G, []),
-	      Gv1 = set_vertex_value(V, vo, [Vo|Vos], Gv),
-	      Gv2 = set_vertex_value(V, vi, [Vi|Vis], Gv1),
-	      Gv2
-      end, G, G).
-    
-
-%% find shortest path from vertex S to all other vertices
-dijkstra(S, G) when ?is_graph(G) ->
-    Vs = vertices(G),
-    Infinity = length(Vs)+1,
-    Dist = maps:from_list([{V,Infinity}||V<-Vs]++[{S,0}]),
-    Prev = #{},
-    Q = sets:from_list(Vs),
-    dijkstra_(G, Q, Dist, Prev, Infinity).
-
-dijkstra_(G, Q, Dist, Prev, Infinity) ->
-    case sets:size(Q) of
-	0 -> Dist;
-	_ ->
-	    {U,D} =
-		sets:fold(fun(U,UD={_Ui,Di}) ->
-				  D = maps:get(U, Dist),
-				  if D < Di -> {U,D};
-				     true -> UD
-				  end
-			  end, {'_',Infinity}, Q),
-	    if D >= Infinity ->
-		    Dist;
-	       true ->
-		    Vs = out_neighbours(U,G),
-		    Q1 = sets:del_element(U,Q),
-		    dijkstra_(G, Q1, U, Vs, Dist, Prev, Infinity)
-	    end
-    end.
-	    
-dijkstra_(G, Q, _U, [], Dist, Prev, Infinity) ->
-    dijkstra_(G, Q, Dist, Prev, Infinity);
-dijkstra_(G, Q, U, [V|Vs], Dist, Prev, Infinity) ->
-    Alt = maps:get(U, Dist) + 1,  %% dist_between(U,V) = 1
-    Dv  = maps:get(V, Dist),
-    if Alt < Dv ->
-	    Dist1 = maps:put(V,Alt,Dist),
-	    Prev1  = maps:put(V,U,Prev),
-	    %% decrease-key v in Q?
-	    dijkstra_(G, Q, U, Vs, Dist1, Prev1, Infinity);
-       true ->
-	    dijkstra_(G, Q, U, Vs, Dist, Prev, Infinity)
+remove_edge(A, B, G = #{ ?TYPE:=graph,e:=Es,v:=Vs}) ->
+    case edge(A, B, G) of
+	{_AorB, E} ->
+	    {Es1,Vs1} = remove_edge_(E, Es, Vs),
+	    G# { e => Es1, v => Vs1 };
+	false ->
+	    G
     end.
 
-show(G) ->
-    save("graph.dot", G),  %% fixme
-    open("graph.dot").
+remove_edge_(E, Es, Vs) ->
+    io:format("remove edge ~w\n", [E]),
+    Ex = maps:get(E,Es),    
+    #{ ?PT1 := V, ?PT2 := W } = Ex,
+    Vx = maps:get(V, Vs),
+    Vx1 = remove_edge_out(E, Vx),
+    io:format("remove edge out from vertex ~w vx1=~p\n", [V,Vx1]),
+    Wx = maps:get(W, Vs),
+    Wx1 = remove_edge_in(E, Wx),
+    io:format("remove edge in from vertex ~w wx1=~p\n", [W,Wx1]),
+    Es1 = maps:remove(E,Es),
+    Vs1 = Vs#{ V => Vx1, W => Wx1 },
+    {Es1,Vs1}.
 
-open(File) ->
-    os:cmd("open -a Graphviz " ++ File).
+remove_edge_list_([E|EdgeList], Es, Vs) ->
+    {Es1, Vs1} = remove_edge_(E, Es, Vs),
+    remove_edge_list_(EdgeList, Es1, Vs1);
+remove_edge_list_([], Es, Vs) -> 
+    {Es,Vs}.
 
-%% emit the graph in DOT format.
-save(G) when ?is_graph(G) ->
-    save("graph.dot", G).
+vertex_out_(Vx) ->
+    maps:get(?OUT, Vx).
 
-save(Filename, G) ->
-    case file:open(Filename, [write]) of
-	{ok,Fd} ->
-	    try save_fd(Fd, G) of
-		Result -> Result
-	    after
-		file:close(Fd)
-	    end;
-	Error ->
-	    Error
+vertex_in_(Vx) ->
+    maps:get(?IN, Vx).
+
+add_edge_out_(NE={_N,E}, Vx) ->
+    Out = vertex_out_(Vx),
+    Out1 = case lists:keytake(E, 2, Out) of
+	       false -> [NE|Out];
+	       {value,{_M,E},Out0} -> [NE|Out0]
+	   end,
+    Vx#{ ?OUT => Out1 }.
+
+add_edge_in_(NE={_N,E}, Vx) ->
+    In = vertex_in_(Vx),
+    In1 = case lists:keytake(E, 2, In) of
+	       false -> [NE|In];
+	       {value,{_M,E},In0} -> [NE|In0]
+	   end,
+    Vx#{ ?IN => In1 }.
+
+remove_edge_out(E, Vx) ->
+    Out = vertex_out_(Vx),
+    case lists:keydelete(E, 2, Out) of
+	Out -> Vx;
+	Out1 -> Vx#{ ?OUT=>Out1}
     end.
 
-save_fd(Fd,G) when is_record(G, graph) ->
-    case G#graph.is_digraph of
-	true -> io:format(Fd, "digraph G {\n", []);
-	false -> io:format(Fd, "graph G {\n", [])
-    end,
-    io:format(Fd, "node [style=bold,penwidth=1,pencolor=black,ordering=in]\n", []),
-    fold_vertices(
-      fun(V,_A) -> 
-	      Color     = get_vertex_value(V, color, G, green),
-	      Style     = get_vertex_value(V, style, G, solid),
-	      FillColor = get_vertex_value(V, fillcolor, G, green),
-	      Scheme    = get_vertex_value(V, colorscheme, G, x11),
-	      Label     = get_vertex_value(V, label, G, V),
-	      XLabel    = get_vertex_value(V, xlabel, G, ""),
-	      io:format(Fd, "\"~s\" [label=\"~s\",xlabel=\"~s\",colorscheme=~s,color=~s,style=~s,fillcolor=~s];\n",
-			[to_string(V),
-			 to_string(Label),
-			 to_string(XLabel),
-			 to_string(Scheme),
-			 to_string(Color),
-			 to_string(Style),
-			 to_string(FillColor)])
-      end, ok, G),
-    fold_vertices(
-      fun(V,_A) ->
-	      Es = in_edges(V, G),
-	      Es1 = lists:keysort(1,Es),  %% more sorting here
-	      lists:foreach(
-		fun(E={A,B}) ->
-			Color = get_edge_value(E, color, G, black),
-			Style = get_edge_value(E, style, G, solid),
-			Label = get_edge_value(E, label, G, ""),
-			PenWidth = get_edge_value(E, penwidth, G, 1),
-			Arrow = if G#graph.is_digraph -> "->"; 
-				   true -> "--"
-				end,
-			if G#graph.is_digraph; A < B ->
-				io:format(Fd, "\"~s\" ~s \"~s\" [label=\"~s\",color=~s,style=~s,penwidth=~w];\n", 
-					  [to_string(A),Arrow,to_string(B),
-					   to_string(Label),
-					   to_string(Color),
-					   to_string(Style),
-					   PenWidth]);
-			   true ->
-				ok
-			end
-		end, Es1)
-      end, ok, G),
-    io:format(Fd, "}\n", []).
-
-%%
-%% Load graph in 
-%% connection matrix format
-%% 
-%%
-load(Filename) ->
-    case file:open(Filename, [read]) of
-	{ok, Fd} ->
-	    try load_fd(Fd) of
-		G -> G
-	    after
-		file:close(Fd)
-	    end;
-	Error ->
-	    Error
+remove_edge_in(E, Vx) ->
+    In = vertex_in_(Vx),
+    case lists:keydelete(E, 2, In) of
+	In -> Vx;
+	In1 -> Vx#{ ?IN=>In1}
     end.
 
-load_fd(Fd) ->
-    case read_sym_row(Fd) of
-	eof -> {error, eof};
-	[] ->  {error, missing_size_row};
-	[N|_Vs] -> load_fd(Fd, N)
-    end.
+vertices(#{ ?TYPE := graph, v := Vs}) ->
+    maps:keys(Vs).
 
-load_fd(Fd, N) when is_integer(N), N > 0 ->
-    try load_lines(Fd, N, N, []) of
-	M -> 
-	    {ok, from_connection_matrix(M)}
-    catch
-	error:_ -> {error, badarg}
-    end.
+number_of_vertices(#{ ?TYPE := graph, v := Vs}) ->
+    maps:size(Vs).
 
+fold_vertices(Fun, Acc0, #{ ?TYPE := graph, v := Vs}) ->
+    maps:fold(fun(V,_Vx,Acc1) -> Fun(V,Acc1) end, Acc0, Vs).
 
-load_lines(_Fd, 0, _N, Acc) ->
-    lists:reverse(Acc);
-load_lines(Fd, I, N, Acc) ->
-    Ts = read_bin_row(Fd),
-    case length(Ts) of
-	N -> load_lines(Fd, I-1, N, [Ts|Acc])
-    end.
+is_internal_prop(?ID) -> true;
+is_internal_prop(?TYPE) -> true;
+is_internal_prop(?IN) -> true;
+is_internal_prop(?OUT) -> true;
+is_internal_prop(?PT1) -> true;
+is_internal_prop(?PT2) -> true;
+is_internal_prop(_) -> false.
 
-read_sym_row(Fd) ->
-    case file:read_line(Fd) of
-	{ok, Line} ->
-	    transform_sym_row(string:tokens(Line," \t\r\n"));
-	eof -> eof;
-	{error,_} -> []
-    end.
-
-transform_sym_row([H|T]) ->
-    [ try list_to_integer(H) 
-      catch error:_ -> list_to_atom(H)
-      end | transform_sym_row(T)];
-transform_sym_row([]) ->
-    [].
-
-read_bin_row(Fd) ->
-    case file:read_line(Fd) of
-	{ok, Line} ->
-	    transform_bin_row(string:tokens(Line," \t\r\n"));
-	eof -> [];
-	{error,_} -> []
-    end.
-
-%%
-%%  "1010" -> [1,0,1,0]
-%%  "1 0 1 0" -> [1,0,1,0]
-%%  
-
-transform_bin_row([[$0|Rs]|T]) -> [0|transform_bin_row([Rs|T])];
-transform_bin_row([[$1|Rs]|T]) -> [1|transform_bin_row([Rs|T])];
-transform_bin_row([[]|T]) -> transform_bin_row(T);
-transform_bin_row([]) -> [].
-
-to_string(X) when is_atom(X) -> atom_to_list(X);
-to_string(X) when is_integer(X) -> integer_to_list(X);
-to_string(X) when is_list(X) -> X;
-to_string(X) -> lists:flatten(io_lib:format("~w", [X])).
+filter_props(Prop) ->
+    lists:filter(fun({K,_V}) -> not is_internal_prop(K) end, Prop).
