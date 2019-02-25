@@ -24,14 +24,14 @@
 -export([remove_vertex/2]).
 -export([vertices/1]).
 -export([number_of_vertices/1]).
--export([fold_vertices/3]).
+-export([fold_vertices/3,fold_xvertices/3]).
 
 -export([is_edge/2, is_edge/3, edge/2, edge/3]).
 -export([put_edge/3, put_edge/4]).
 -export([remove_edge/2, remove_edge/3]).
 -export([edges/1]).
 -export([number_of_edges/1]).
--export([fold_edges/3]).
+-export([fold_edges/3, fold_xedges/3]).
 -export([get_edge/2, get_edge/3, get_edge/4, get_edge/5]).
 
 -export([fold_out/4]).
@@ -45,12 +45,12 @@
 -export([fanin/2]).
 
 %% internal edge/vertex attributes
--define(ID,   '$id').
--define(TYPE, '$type').
--define(IN,   '$in').
--define(OUT,  '$out').
--define(PT1,  '$pt1').
--define(PT2,  '$pt2').
+-define(ID,   '$ID').
+-define(TYPE, '$TYPE').
+-define(IN,   '$IN').
+-define(OUT,  '$OUT').
+-define(PT1,  '$PT1').
+-define(PT2,  '$PT2').
 
 %%
 %% Vertex
@@ -268,6 +268,10 @@ fold_edges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
 		      #{ ?PT1 := V, ?PT2 := W } = Ex,
 		      Fun(V,W,E,Ai) 
 	      end, Acc, Es).
+
+%% like fold_edges but pass the vertex map instead
+fold_xedges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
+    maps:fold(fun(_E,Ex,Ai) -> Fun(Ex,Ai) end, Acc, Es).
 
 get_edge(E, #{?TYPE:=graph,e:=Es}) ->
     Ex = maps:get(E, Es),
@@ -494,6 +498,10 @@ number_of_vertices(#{ ?TYPE := graph, v := Vs}) ->
 
 fold_vertices(Fun, Acc0, #{ ?TYPE := graph, v := Vs}) ->
     maps:fold(fun(V,_Vx,Acc1) -> Fun(V,Acc1) end, Acc0, Vs).
+
+%% like fold_vertices but pass the vertex map instead
+fold_xvertices(Fun, Acc0, #{ ?TYPE := graph, v := Vs}) ->
+    maps:fold(fun(_V,Vx,Acc1) -> Fun(Vx,Acc1) end, Acc0, Vs).
 
 is_internal_prop(?ID) -> true;
 is_internal_prop(?TYPE) -> true;
