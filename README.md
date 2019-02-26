@@ -20,3 +20,5 @@ minor hints
 * press shift to add nodes to selection
 * select and drag to move graph parts around
 * select and backspace to delete vertices
+* press arrow keys to move selected subgraph
+
