@@ -12,7 +12,6 @@
 
 %% API
 -export([start/0]).
--export([start_link/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -31,10 +30,11 @@
 	 background = {255,0,0},
 	 pt1    = false,
 	 pt2    = false,
-	 move   = false,
-	 selected = [],
-	 shift = false,
-	 ctrl  = false,
+	 operation = none :: none | select | move | vertex | edge,
+	 selected = [],   %% list of selected vertices (and edges?)
+	 shift = false,   %% add to selection
+	 ctrl  = false,   %% add vertex
+	 alt   = false,   %% add edge
 	 graph
 	}).
 
@@ -43,6 +43,7 @@
 
 -define(VERTEX_SIDE, 16).
 -define(VERTEX_COLOR, {0,255,0}).
+-define(EDGE_COLOR, {0,255,255}).
 
 %%%===================================================================
 %%% API
@@ -50,6 +51,7 @@
 
 start() ->
     start([true]).
+
 start([TTYLogger]) ->
     (catch error_logger:tty(TTYLogger)),
     application:start(lager),
@@ -57,20 +59,8 @@ start([TTYLogger]) ->
     Width  = application:get_env(graph, screen_width, ?WIDTH),
     Height = application:get_env(graph, screen_height, ?HEIGHT),
     application:ensure_all_started(epx),
-    start_link([{screen_width,Width},{screen_height,Height}]).
-
-%%--------------------------------------------------------------------
-%% @doc
-%% Starts the server
-%% @end
-%%--------------------------------------------------------------------
--spec start_link([{atom(),term()}]) ->
-			{ok, Pid :: pid()} |
-			{error, Error :: {already_started, pid()}} |
-			{error, Error :: term()} |
-			ignore.
-start_link(Opts) ->
-    gen_server:start_link({local, ?SERVER}, ?MODULE, Opts, []).
+    Opts = [{screen_width,Width},{screen_height,Height}],
+    gen_server:start({local, ?SERVER}, ?MODULE, Opts, []).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -99,10 +89,13 @@ init(Options) ->
 				 motion, left,  %% motion-left-button
 				 resize,
 				 button_press,button_release]),
-    BackgroundPx = epx:pixmap_create(Width, Height, argb),
-    Pixmap = epx:pixmap_create(Width, Height, argb),
-    epx:pixmap_attach(BackgroundPx, Backend),
     epx:window_attach(Window, Backend),
+
+    BackgroundPx = epx:pixmap_create(Width, Height, argb),
+    epx:pixmap_attach(BackgroundPx, Backend),
+
+    Pixmap = epx:pixmap_create(Width, Height, argb),
+
     State = #state{ backend = Backend,
 		    window = Window,
 		    background_pixels = BackgroundPx,
@@ -211,14 +204,32 @@ format_status(_Opt, Status) ->
 handle_epx_event(Event, State) ->
     case Event of
 	{button_press, [left], _Where={X,Y,_Z}} ->
-	    case State#state.ctrl of
-		true ->
-		    G1 = graph:put_vertex(make_ref(), 
+	    if State#state.ctrl ->  %% Add vertex
+		    G1 = graph:put_vertex(make_ref(),
 					  [{x,X},{y,Y},{color,?VERTEX_COLOR}],
 					  State#state.graph),
 		    invalidate(State),
-		    {noreply, State#state { graph = G1 }};
-		false ->
+		    {noreply, State#state { operation = vertex,
+					    pt1 = {X,Y}, pt2 = {X,Y},
+					    graph = G1 }};
+
+	       State#state.alt ->  %% Add edge
+		    case select(X,Y,State#state.graph,[]) of
+			[] ->
+			    invalidate(State),
+			    {noreply, State#state { selected = [],
+						    operation = none }};
+			[V|_] ->
+			    Window = State#state.window,
+			    epx:window_enable_events(Window,[motion]),
+			    invalidate(State),
+			    {noreply, State#state { operation = edge,
+						    selected = [V],
+						    pt1 = {X,Y}, pt2 = {X,Y}
+						  }}
+		    end;
+
+	       true ->
 		    Window = State#state.window,
 		    epx:window_enable_events(Window,[motion]),
 		    invalidate(State),
@@ -227,25 +238,30 @@ handle_epx_event(Event, State) ->
 			[] ->
 			    Sel = if State#state.shift -> Sel0; true -> [] end,
 			    {noreply,
-			     State#state { move = false,
+			     State#state { operation = select,
 					   selected = Sel,
 					   pt1 = {X,Y}, pt2 = {X,Y} }};
 			[V|_] ->
 			    case lists:member(V, Sel0) of
 				true ->
+				    Sel = if State#state.shift ->
+						  Sel0 -- [V];
+					     true ->
+						  Sel0
+					  end,
 				    {noreply,
-				     State#state { move = true,
-						   selected = Sel0,
+				     State#state { operation = move,
+						   selected = Sel,
 						   pt1={X,Y}, pt2={X,Y} }};
 				false ->
 				    if State#state.shift ->
 					    {noreply,
-					     State#state { move = false,
+					     State#state { operation = select,
 							   selected = [V|Sel0],
 							   pt1={X,Y},pt2={X,Y}}};
 				       true ->
 					    {noreply,
-					     State#state { move = true,
+					     State#state { operation = move,
 							   selected = [V],
 							   pt1={X,Y},pt2={X,Y}}}
 				    end
@@ -262,69 +278,106 @@ handle_epx_event(Event, State) ->
 	       Pt1 ->
 		    Pt2 = {X,Y},
 		    Sel0 = State#state.selected,
-		    case State#state.move of
-			true ->
+		    case State#state.operation of
+			move ->
 			    Offset = coords_sub(Pt2, Pt1),
-			    G = offset_vertices(State#state.graph,Offset,Sel0),
+			    G = move_vertices(Sel0,Offset,State#state.graph),
 			    invalidate(State),
 			    {noreply, State#state { pt1 = false, pt2 = false,
-						    move = false,
+						    operation = none,
 						    graph = G }};
-			false ->
+			select ->
 			    Rect = coords_to_rect(Pt1,Pt2),
 			    Sel1 = if State#state.shift -> Sel0; true -> [] end,
 			    Sel = select_area(Rect,State#state.graph,Sel1),
 			    invalidate(State),
 			    {noreply, State#state { pt1 = false, pt2 = false,
-						    move = false,
-						    selected = Sel }}
+						    operation = none,
+						    selected = Sel }};
+			edge ->
+			    invalidate(State),
+			    case select(X,Y,State#state.graph,[]) of
+				[] ->
+				    {noreply, State#state { pt1 = false, 
+							    pt2 = false,
+							    operation = none }};
+				[W|_] when W =:= hd(State#state.selected) ->
+				    {noreply, State#state { pt1 = false, 
+							    pt2 = false,
+							    operation = none }};
+				[W|_] ->
+				    [V] = State#state.selected,
+				    G = graph:put_edge(V, W, [{color, black}],
+						       State#state.graph),
+				    {noreply, State#state { pt1 = false,
+							    pt2 = false,
+							    selected = [W],
+							    graph = G,
+							    operation = none }}
+			    end;
+			_ ->
+			    invalidate(State),
+			    {noreply, State#state { pt1 = false, pt2 = false,
+						    operation = none }}
 		    end
 	    end;
 
 	{motion, [left], {X,Y,_Z}} ->
 	    case State#state.pt1 of
-	       false -> 
+	       false ->
 		    {noreply, State};
 	       _Pt1 ->
 		    invalidate(State),
 		    {noreply, State#state { pt2 = {X,Y}}}
 	    end;
 
-	{key_press, $\b, _Mod, _code} ->
-	    G = lists:foldl(
-		  fun(V, Gi) ->
-			  graph:remove_vertex(V, Gi)
-		  end, State#state.graph, State#state.selected),
+	{key_press, Sym, Mod, _code} ->
+	    %% io:format("Key press ~p mod=~p\n", [Sym,Mod]),
+	    Shift = case lists:member(shift,Mod) of
+			true -> true;
+			false -> State#state.shift
+		    end,
+	    Ctrl = case lists:member(ctrl,Mod) of
+		       true -> true;
+		       false -> State#state.ctrl
+		   end,
+	    Alt = case lists:member(alt,Mod) of
+		      true -> true;
+		      false -> State#state.alt
+		  end,
+	    G = State#state.graph,
+	    Sel0 = State#state.selected,
+	    G1 = case Sym of
+		     up    -> move_vertices(Sel0, {0, -1}, G);
+		     down  -> move_vertices(Sel0, {0,  1}, G);
+		     left  -> move_vertices(Sel0, {-1, 0}, G);
+		     right -> move_vertices(Sel0, {1,  0}, G);
+		     $\b   -> remove_vertices(Sel0, G);
+		     _ -> G
+		 end,
+	    Sel = case Sym of
+		      $\b -> [];
+		      _ -> State#state.selected
+		  end,
 	    invalidate(State),
-	    {noreply, State#state { graph = G, selected = [] }};
-
-	{key_press, _Sym, Mod, _code} ->
-	    %% io:format("Key press ~p mod=~p\n", [_Sym,_Mod]),
-	    Shift = lists:member(shift,Mod),
-	    Ctrl  = lists:member(ctrl,Mod),
-	    State1 = 
-		if Shift -> State#state { shift = true };
-		   true -> State
-		end,
-	    State2 = 
-		if Ctrl -> State1#state { ctrl = true };
-		   true -> State1
-		end,
-	    {noreply, State2};
+	    {noreply, State#state { graph=G1, selected = Sel,
+				    shift=Shift, ctrl=Ctrl, alt=Alt}};
 
 	{key_release, _Sym, Mod, _code} ->
-	    %% io:format("Key release ~p mod=~p\n", [_Sym,Mod]),
-	    Shift = lists:member(shift,Mod),
-	    Ctrl  = lists:member(ctrl,Mod),
-	    State1 = 
-		if Shift -> State#state { shift = false };
-		   true -> State
-		end,
-	    State2 = 
-		if Ctrl -> State1#state { ctrl = false };
-		   true -> State1
-		end,
-	    {noreply, State2};
+	    %% %% io:format("Key release ~p mod=~p\n", [_Sym,Mod]),
+	    Shift = case lists:member(shift,Mod) of
+			true -> false;
+			false -> State#state.shift
+		    end,
+	    Ctrl = case lists:member(ctrl,Mod) of
+		       true -> false;
+		       false -> State#state.ctrl
+		   end,
+	    Alt = case lists:member(alt,Mod) of
+		      true -> false;
+		      false -> State#state.alt
+		  end,
+	    {noreply, State#state { shift = Shift, ctrl = Ctrl, alt = Alt }};
 
 	{resize, {_W,_H,_D}} ->
 	    invalidate(State),
@@ -353,15 +406,27 @@ handle_epx_event(Event, State) ->
 	    {noreply,State}
     end.
 
+remove_vertices([V|Vs], G) ->
+    remove_vertices(Vs, graph:remove_vertex(V, G));
+remove_vertices([], G) -> G.
+
+move_vertices([V|Vs], Offset, G) ->
+    Pos = get_vertex_coord(V, G),
+    Pos1 = coords_add(Pos, Offset),
+    G1 = set_vertex_pos(V, G, Pos1),
+    move_vertices(Vs, Offset, G1);
+move_vertices([], _Offset, G) ->
+    G.
+
 select(X,Y,G,Selected) ->
     Side2 = ?VERTEX_SIDE div 2,
     graph:fold_vertices(
       fun(V, Sel) ->
 	      case lists:member(V, Sel) of
 		  false ->
-		      Xi = graph:get_vertex(V, x, G, 0)-Side2,
+		      Xi = graph:get_vertex_by_id(V, x, G, 0)-Side2,
 		      if X >= Xi, X < Xi+?VERTEX_SIDE ->
-			      Yi = graph:get_vertex(V, y, G, 0)-Side2,
+			      Yi = graph:get_vertex_by_id(V, y, G, 0)-Side2,
 			      if Y >= Yi, Y < Yi+?VERTEX_SIDE ->
 				      [V | Sel];
 				 true ->
@@ -392,17 +457,8 @@ select_area(Rect,G,Selected) ->
 	      end
       end, Selected, G).
 
-offset_vertices(G, Offset, Selected) ->
-    graph:fold_vertices(
-      fun(V, Gi) ->
-	      case lists:member(V, Selected) of
-		  false -> Gi;
-		  true ->
-		      Pos = get_vertex_coord(V, Gi),
-		      Pos1 = coords_add(Pos, Offset),
-		      set_vertex_pos(V, Gi, Pos1)
-	      end
-      end, G, G).
+rect_offset({X,Y,W,H}, {X1,Y1}) ->
+    {X+X1,Y+Y1,W,H}.
 
 coords_sub({X1,Y1},{X0,Y0}) ->
     {X1-X0,Y1-Y0}.
@@ -418,22 +474,26 @@ coords_to_rect({X0,Y0},{X1,Y1}) ->
     {X,Y,W,H}.
 
 get_vertex_coord(V,G) ->
-    {graph:get_vertex(V, x, G, 0), graph:get_vertex(V, y, G, 0)}.
+    {graph:get_vertex_by_id(V, x, G, 0), graph:get_vertex_by_id(V, y, G, 0)}.
 
 set_vertex_pos(V, G, {X,Y}) ->
     graph:put_vertex(V, [{x,X},{y,Y}], G).
 
 vertex_rect(V, G) ->
     Side2 = ?VERTEX_SIDE div 2,
-    Xi = graph:get_vertex(V, x, G, 0)-Side2,
-    Yi = graph:get_vertex(V, y, G, 0)-Side2,
-    {Xi,Yi,?VERTEX_SIDE,?VERTEX_SIDE}.
+    X = graph:get_vertex_by_id(V, x, G, 0)-Side2,
+    Y = graph:get_vertex_by_id(V, y, G, 0)-Side2,
+    {X,Y,?VERTEX_SIDE,?VERTEX_SIDE}.
 
 rect_overlap(R1,R2) ->
     case epx_rect:intersect(R1, R2) of
 	{_,_,0,0} -> false;
 	_ -> true
     end.
+
+point_in_rect({X1,Y1}, {X2,Y2,W,H}) ->
+    (X1 >= X2) andalso (X1 =< X2+W-1) andalso
+    (Y1 >= Y2) andalso (Y1 =< Y2+H-1).
 
 invalidate(State) ->
     self() ! {epx_event, State#state.window, redraw}.
@@ -449,42 +509,83 @@ flush_redraw(State) ->
 draw(State = #state { graph = G, selected = Selected }) ->
     epx:pixmap_fill(State#state.background_pixels, State#state.background),
     epx_gc:set_fill_style(solid),
-    epx_gc:set_border_color(black),
-    Side2 = (?VERTEX_SIDE div 2),
-    VertexLT = {-Side2,-Side2},
-    Offset = if State#state.move ->
+    Offset = if State#state.operation =:= move ->
 		     coords_sub(State#state.pt2,State#state.pt1);
 		true ->
 		     {0,0}
 	     end,
+    graph:fold_edges(
+      fun(V,W,E,Acc) ->
+	      Vxy0 = get_vertex_coord(V, G),
+	      Vxy  = case lists:member(V, Selected) of
+			 true ->
+			     coords_add(Vxy0,Offset);
+			 false ->
+			     Vxy0
+		     end,
+	      Wxy0 = get_vertex_coord(W, G),
+	      Wxy  = case lists:member(W, Selected) of
+			 true ->
+			     coords_add(Wxy0,Offset);
+			 false ->
+			     Wxy0
+		     end,
+	      Color = graph:get_edge_by_id(E, color, G, ?EDGE_COLOR),
+	      epx_gc:set_foreground_color(Color),
+	      epx_gc:set_line_width(1),
+	      epx:draw_line(State#state.background_pixels,Vxy, Wxy),
+	      Acc
+      end, [], G),
+
     graph:fold_vertices(
       fun(V, Acc) ->
-	      {X,Y} = 
+	      Rect0 = vertex_rect(V, G),
+	      Rect = 
 		  case lists:member(V, Selected) of
 		      true ->
 			  epx_gc:set_border_width(2),
-			  Coord = coords_add(get_vertex_coord(V, G),Offset),
-			  coords_add(Coord, VertexLT);
+			  epx_gc:set_border_color(black),
+			  rect_offset(Rect0, Offset);
 		      false ->
 			  epx_gc:set_border_width(0),
-			  Coord = get_vertex_coord(V, G),
-			  coords_add(Coord, VertexLT)
+			  Rect0
 		  end,
-	      Color = graph:get_vertex(V, color, G, ?VERTEX_COLOR),
+	      %% high light vertext under pt2
+	      if State#state.operation =:= edge ->
+		      case point_in_rect(State#state.pt2, Rect) of
+			  true ->
+			      epx_gc:set_border_width(2),
+			      epx_gc:set_border_color(white);
+			  false ->
+			      ok
+		      end;
+		 true ->
+		      ok
+	      end,
+	      Color = graph:get_vertex_by_id(V, color, G, ?VERTEX_COLOR),
 	      epx_gc:set_fill_color(Color),
-	      epx:draw_ellipse(State#state.background_pixels,
-			       X, Y, ?VERTEX_SIDE, ?VERTEX_SIDE),
+	      epx:draw_ellipse(State#state.background_pixels,Rect),
 	      Acc
       end, [], G),
 
     epx_gc:set_border_width(1),
-    if State#state.move -> ok;
-       State#state.pt1 =:= false; State#state.pt2 =:= false -> ok;
+    if State#state.pt1 =:= false; State#state.pt2 =:= false -> 
+	    ok;
        true ->
-	    Rect = coords_to_rect(State#state.pt1,State#state.pt2),
-	    epx_gc:set_fill_color({100,100,100,100}),
-	    epx_gc:set_fill_style(blend),
-	    epx:draw_rectangle(State#state.background_pixels, Rect)
+	    case State#state.operation of
+		select ->
+		    Rect = coords_to_rect(State#state.pt1,State#state.pt2),
+		    epx_gc:set_fill_color({100,100,100,100}),
+		    epx_gc:set_fill_style(blend),
+		    epx:draw_rectangle(State#state.background_pixels, Rect);
+		edge ->
+		    epx_gc:set_foreground_color(blue),
+		    epx_gc:set_line_width(1),
+		    epx:draw_line(State#state.background_pixels,
+				  State#state.pt1,State#state.pt2);
+		_ ->
+		    ok
+	    end
     end,
     epx:pixmap_draw(State#state.background_pixels, State#state.window,
 		    0, 0, 0, 0, 

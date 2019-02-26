@@ -20,7 +20,7 @@
 
 -export([is_vertex/2]).
 -export([put_vertex/2, put_vertex/3]).
--export([get_vertex/2, get_vertex/3, get_vertex/4]).
+-export([get_vertex_by_id/2, get_vertex_by_id/3, get_vertex_by_id/4]).
 -export([remove_vertex/2]).
 -export([vertices/1]).
 -export([number_of_vertices/1]).
@@ -28,11 +28,13 @@
 
 -export([is_edge/2, is_edge/3, edge/2, edge/3]).
 -export([put_edge/3, put_edge/4]).
+-export([put_edge_by_id/3, put_edge_by_id/5]).
 -export([remove_edge/2, remove_edge/3]).
 -export([edges/1]).
 -export([number_of_edges/1]).
 -export([fold_edges/3, fold_xedges/3]).
--export([get_edge/2, get_edge/3, get_edge/4, get_edge/5]).
+-export([get_edge/4, get_edge/5]).
+-export([get_edge_by_id/2, get_edge_by_id/3, get_edge_by_id/4]).
 
 -export([fold_out/4]).
 -export([out_neighbours/2]).
@@ -108,9 +110,9 @@ from_undirected_edge_list(Es) ->
 from_edge_list_([{A,B} | Es], G) ->
     from_edge_list_(Es, put_edge(A, B, G));
 from_edge_list_([{A,B,E} | Es], G) ->
-    from_edge_list_(Es, put_edge(A,B,E,[],G));
+    from_edge_list_(Es, put_edge_by_id(E,[],A,B,G));
 from_edge_list_([{A,B,E,EProps} | Es], G) ->
-    from_edge_list_(Es, put_edge(A,B,E,EProps,G));
+    from_edge_list_(Es, put_edge_by_id(E,EProps,A,B,G));
 from_edge_list_([], G) ->
     G.
 
@@ -165,38 +167,17 @@ to_neighbour_list(G) ->
     fold_vertices(
       fun(V,Ai) ->
 	      Ns = out_neighbours(V, G),
-	      case get_vertex(V,G) of
+	      case get_vertex_by_id(V,G) of
 		  [] -> [{V,Ns} | Ai];
 		  VProps -> [{V,VProps,Ns} | Ai]
 	      end
       end, [], G).
 
-put_edge(E,Props,G=#{?TYPE:=graph,e:=Es}) when is_list(Props) ->
+put_edge_by_id(E,Props,G=#{?TYPE:=graph,e:=Es}) when is_list(Props) ->
     Es1 = add_edge_props_(E, Props, Es),
-    G# { e => Es1 };
-put_edge(A0,B0,G=#{ ?TYPE:=graph,is_digraph:=Digraph}) ->
-    {A,B} = sort(A0,B0,Digraph),
-    case edge(A,B,G) of
-	{_AorB,_E} ->
-	    G;
-	false ->
-	    insert_edge_(A,B,make_ref(),[],G)
-    end.
-	    
-put_edge(A0,B0,Props,G=#{ ?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
-    {A,B} = sort(A0,B0,Digraph),
-    case edge(A,B,G) of
-	{_AorB,E} ->
-	    Es1 = add_edge_props_(E,Props,Es),
-	    G#{ e => Es1 };
-	false ->
-	    insert_edge_(A,B,make_ref(),Props,G)
-    end.
+    G# { e => Es1 }.
 
-%% put edge given a edge id! if edge id already exist it must be 
-%% removed before added or perhaps just update properties.
-
-put_edge(A0,B0,E,Props,G = #{?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
+put_edge_by_id(E,Props,A0,B0,G=#{?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
     {A,B} = sort(A0,B0,Digraph),
     case maps:find(E,Es) of
 	error ->
@@ -214,11 +195,33 @@ put_edge(A0,B0,E,Props,G = #{?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
 	    end
     end.
 
-insert_edge_(A,B,E,Props,G=#{?TYPE:=graph}) ->
+
+put_edge(A,B,G=#{ ?TYPE:=graph}) ->
+    put_edge(A,B,[],G).
+	    
+put_edge(A0,B0,Props,G=#{ ?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
+    {A,B} = sort(A0,B0,Digraph),
+    case edge(A,B,G) of
+	{_AorB,_E} when Props =:= [] ->
+	    G;
+	{_AorB,E} ->
+	    Es1 = add_edge_props_(E,Props,Es),
+	    G#{ e => Es1 };
+	false ->
+	    if A =:= B ->
+		    io:format("no cycles accepted yet\n", []),
+		    G;
+	       true ->
+		    insert_edge_(A,B,make_ref(),Props,G)
+	    end
+    end.
+
+
+insert_edge_(A,B,E,Props,G=#{?TYPE:=graph}) when A =/= B ->
     Ex = #{ ?TYPE=>edge,?ID=>E,?PT1=>A,?PT2=>B},
     add_edge_(A,B,E,Ex,Props,G).
 
-add_edge_(A,B,E,Ex,Props0,G=#{?TYPE:=graph,e:=Es0,v:=Vs0}) ->
+add_edge_(A,B,E,Ex,Props0,G=#{?TYPE:=graph,e:=Es0,v:=Vs0}) when A =/= B ->
     Ax = put_vertex_(A,[],Vs0),
     Ax1 = add_edge_out_({B,E}, Ax),
     Bx = put_vertex_(B,[],Vs0),
@@ -273,14 +276,19 @@ fold_edges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
 fold_xedges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
     maps:fold(fun(_E,Ex,Ai) -> Fun(Ex,Ai) end, Acc, Es).
 
-get_edge(E, #{?TYPE:=graph,e:=Es}) ->
+get_edge_by_id(E, #{?TYPE:=graph,e:=Es}) ->
     Ex = maps:get(E, Es),
     filter_props(maps:to_list(Ex)).
 
-get_edge(E, Key, #{?TYPE:=graph,e:=Es}) ->
+get_edge_by_id(E, Key, #{?TYPE:=graph,e:=Es}) ->
     Ex = maps:get(E, Es),
     maps:get(Key,Ex).
 
+get_edge_by_id(E, Key, #{?TYPE:=graph,e:=Es}, Default) ->
+    Ex = maps:get(E, Es),
+    maps:get(Key,Ex,Default).
+
+%% get edge by vertices
 get_edge(A0,B0,Key,#{?TYPE:=graph,e:=Es,v:=Vs,is_digraph:=Digraph}) ->
     {A,B} = sort(A0,B0,Digraph),
     Ax = maps:get(A,Vs),
@@ -396,14 +404,14 @@ put_vertex_(V, Props0, Vs) ->
 	 end,
     maps:merge(Vx, maps:from_list(Props)).
 
-get_vertex(V, #{ ?TYPE := graph, v := Vs}) ->
+get_vertex_by_id(V, #{ ?TYPE := graph, v := Vs}) ->
     filter_props(maps:to_list(maps:get(V, Vs))).
 
-get_vertex(V, Key, #{ ?TYPE := graph, v := Vs}) ->
+get_vertex_by_id(V, Key, #{ ?TYPE := graph, v := Vs}) ->
     Vx = maps:get(V, Vs),
     maps:get(Key, Vx).
 
-get_vertex(V, Key, #{ ?TYPE := graph, v := Vs}, Default) ->
+get_vertex_by_id(V, Key, #{ ?TYPE := graph, v := Vs}, Default) ->
     Vx = maps:get(V, Vs),
     maps:get(Key, Vx, Default).
 
@@ -435,15 +443,15 @@ remove_edge(A, B, G = #{ ?TYPE:=graph,e:=Es,v:=Vs}) ->
     end.
 
 remove_edge_(E, Es, Vs) ->
-    io:format("remove edge ~w\n", [E]),
+    %% io:format("remove edge ~w\n", [E]),
     Ex = maps:get(E,Es),    
     #{ ?PT1 := V, ?PT2 := W } = Ex,
     Vx = maps:get(V, Vs),
     Vx1 = remove_edge_out(E, Vx),
-    io:format("remove edge out from vertex ~w vx1=~p\n", [V,Vx1]),
+    %% io:format("remove edge out from vertex ~w vx1=~p\n", [V,Vx1]),
     Wx = maps:get(W, Vs),
     Wx1 = remove_edge_in(E, Wx),
-    io:format("remove edge in from vertex ~w wx1=~p\n", [W,Wx1]),
+    %% io:format("remove edge in from vertex ~w wx1=~p\n", [W,Wx1]),
     Es1 = maps:remove(E,Es),
     Vs1 = Vs#{ V => Vx1, W => Wx1 },
     {Es1,Vs1}.

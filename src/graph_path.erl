@@ -66,10 +66,10 @@ valency_sum_sequence_xlabel(G, N) ->
     G1 = valency_sum_sequence(G,N),
     graph:fold_vertices(
       fun(V, Gv) ->
-	      Vo = graph:get_vertex_value(V, vo, Gv, []),
-	      Vi = graph:get_vertex_value(V, vi, Gv, []),
+	      Vo = graph:get_vertex_by_id(V, vo, Gv, []),
+	      Vi = graph:get_vertex_by_id(V, vi, Gv, []),
 	      Xl = lists:flatten(io_lib:format("-~w+~w", [Vi,Vo])),
-	      graph:set_vertex_value(V, xlabel, Xl, Gv)
+	      graph:put_vertex(V, [{xlabel,Xl}], Gv)
       end, G1, G1).
 
 
@@ -85,18 +85,18 @@ valency_sum_sequence(G) ->
 	      Vo = 
 		  graph:fold_out_edges(
 		    fun(_V,W,Sum) ->
-			    [S|_] = graph:get_vertex_value(W, vo, G, [1]),
+			    [S|_] = graph:get_vertex_by_id(W, vo, G, [1]),
 			    S+Sum
 		    end, 0, V, G),
 	      Vi = graph:fold_in_edges(
 		      fun(_V,W,Sum) ->
-			      [S|_] = graph:get_vertex_value(W, vi, G, [1]),
+			      [S|_] = graph:get_vertex_by_id(W, vi, G, [1]),
 			      S+Sum
 		      end, 0, V, G),
-	      Vos = graph:get_vertex_value(V, vo, G, []),
-	      Vis = graph:get_vertex_value(V, vi, G, []),
-	      Gv1 = graph:set_vertex_value(V, vo, [Vo|Vos], Gv),
-	      Gv2 = graph:set_vertex_value(V, vi, [Vi|Vis], Gv1),
+	      Vos = graph:get_vertex_by_id(V, vo, G, []),
+	      Vis = graph:get_vertex_by_id(V, vi, G, []),
+	      Gv1 = graph:set_vertex_by_id(V, vo, [Vo|Vos], Gv),
+	      Gv2 = graph:set_vertex_by_id(V, vi, [Vi|Vis], Gv1),
 	      Gv2
       end, G, G).
     

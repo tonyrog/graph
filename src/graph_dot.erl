@@ -41,12 +41,12 @@ save_fd(Fd, G = #{ type := graph, is_digraph := Digraph}) ->
     io:format(Fd, "node [style=bold,penwidth=1,pencolor=black,ordering=in]\n", []),
     graph:fold_vertices(
       fun(V,_A) -> 
-	      Color     = graph:get_vertex_value(V, color, G, green),
-	      Style     = graph:get_vertex_value(V, style, G, solid),
-	      FillColor = graph:get_vertex_value(V, fillcolor, G, green),
-	      Scheme    = graph:get_vertex_value(V, colorscheme, G, x11),
-	      Label     = graph:get_vertex_value(V, label, G, V),
-	      XLabel    = graph:get_vertex_value(V, xlabel, G, ""),
+	      Color     = graph:get_vertex_by_id(V, color, G, green),
+	      Style     = graph:get_vertex_by_id(V, style, G, solid),
+	      FillColor = graph:get_vertex_by_id(V, fillcolor, G, green),
+	      Scheme    = graph:get_vertex_by_id(V, colorscheme, G, x11),
+	      Label     = graph:get_vertex_by_id(V, label, G, V),
+	      XLabel    = graph:get_vertex_by_id(V, xlabel, G, ""),
 	      io:format(Fd, "\"~s\" [label=\"~s\",xlabel=\"~s\",colorscheme=~s,color=~s,style=~s,fillcolor=~s];\n",
 			[to_string(V),
 			 to_string(Label),
