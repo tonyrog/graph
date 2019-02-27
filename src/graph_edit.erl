@@ -23,16 +23,28 @@
 -define(HEIGHT, 480).
 -define(VERTEX_SIZE,  16).
 
--define(SCREEN_COLOR, beige).
--define(SELECT_COLOR, {100,100,100,100}).
-
--define(VERTEX_COLOR,           darkgray).
--define(VERTEX_BORDER_COLOR,    burlyWood).
--define(VERTEX_HIGHLIGHT_COLOR, white).
--define(EDGE_COLOR,             darkgray).
--define(EDGE_HIGHLIGHT_COLOR,   darkgreen).
-
-
+%% color profile with default values
+-record(profile,
+	{
+	 screen_color                  = beige,
+	 selection_alpha               = 100,
+	 selection_color               = gray,
+	 selection_border_width        = 1,
+	 selection_border_color        = black,
+	 vertex_color                  = darkgray,
+	 vertex_border_width           = 0,
+	 vertex_border_color           = black,
+	 vertex_select_color           = darkgreen,
+	 vertex_select_border_width    = 2,
+	 vertex_select_border_color    = black,
+	 vertex_highlight_color        = darkgray,
+	 vertex_highlight_border_width = 2,
+	 vertex_highlight_border_color = red,
+	 edge_color                    = darkgray,
+	 edge_select_color             = darkgreen,
+	 edge_highlight_color          = white
+	}).
+	 
 -record(state,
 	{
 	 backend,
@@ -41,13 +53,7 @@
 	 pixmap,
 	 width,
 	 height,
-	 background_color = ?SCREEN_COLOR,
-	 select_color = ?SELECT_COLOR,
-	 vertex_color = ?VERTEX_COLOR,
-	 vertex_highlight_color = ?VERTEX_HIGHLIGHT_COLOR,
-	 vertex_border_color = ?VERTEX_BORDER_COLOR,
-	 edge_color = ?EDGE_COLOR,
-	 edge_highlight_color = ?EDGE_HIGHLIGHT_COLOR,
+	 profile,         %% color profile
 	 pt1    = false,
 	 pt2    = false,
 	 operation = none :: none | select | move | vertex | edge,
@@ -98,14 +104,7 @@ init(Options) ->
     Env = Options ++ application:get_all_env(graph),
     Width  = proplists:get_value(screen_width, Env, ?WIDTH),
     Height = proplists:get_value(screen_height, Env, ?HEIGHT),
-    BgColor = proplists:get_value(screen_color, Env, ?SCREEN_COLOR),
-    SelectColor = proplists:get_value(select_color, Env, ?SELECT_COLOR),
-    VertexColor = proplists:get_value(vertex_color, Env, ?VERTEX_COLOR),
-    VertexBorderColor = proplists:get_value(vertex_border_color, Env, 
-					    ?VERTEX_BORDER_COLOR),
-    VertexHighlightColor = proplists:get_value(vertex_highlight_color, Env, 
-					       ?VERTEX_HIGHLIGHT_COLOR),
-    EdgeColor = proplists:get_value(edge_color, Env, ?EDGE_COLOR),
+    Profile = load_profile(Env),
     Backend = epx_backend:default(),
     Window = epx:window_create(40, 40, Width, Height,
 			        [key_press,key_release,
@@ -122,12 +121,7 @@ init(Options) ->
     State = #state{ backend = Backend,
 		    window = Window,
 		    background_pixels = BackgroundPx,
-		    background_color  = BgColor,
-		    select_color = SelectColor,
-		    vertex_color  = VertexColor,
-		    vertex_border_color  = VertexBorderColor,
-		    vertex_highlight_color  = VertexHighlightColor,
-		    edge_color  = EdgeColor,
+		    profile = Profile,
 		    pixmap = Pixmap,
 		    width  = Width,
 		    height = Height,
@@ -234,9 +228,9 @@ handle_epx_event(Event, State) ->
     case Event of
 	{button_press, [left], _Where={X,Y,_Z}} ->
 	    if State#state.ctrl ->  %% Add vertex
-		    VertexColor = State#state.vertex_color,
+		    Color = (State#state.profile)#profile.vertex_color,
 		    G1 = graph:put_vertex(make_ref(),
-					  [{x,X},{y,Y},{color,VertexColor}],
+					  [{x,X},{y,Y},{color,Color}],
 					  State#state.graph),
 		    invalidate(State),
 		    {noreply, State#state { operation = vertex,
@@ -337,9 +331,9 @@ handle_epx_event(Event, State) ->
 							    operation = none }};
 				[W|_] ->
 				    [V] = State#state.selected,
-				    EdgeColor = State#state.edge_color,
+				    Color = (State#state.profile)#profile.edge_color,
 				    G = graph:put_edge(V, W, 
-						       [{color,EdgeColor}],
+						       [{color,Color}],
 						       State#state.graph),
 				    {noreply, State#state { pt1 = false,
 							    pt2 = false,
@@ -437,6 +431,32 @@ handle_epx_event(Event, State) ->
 	    io:format("Epx event = ~p\n", [Event]),
 	    {noreply,State}
     end.
+
+-define(env(Key, Env, Default),
+	proplists:get_value(Key, Env, Default#profile.Key)).
+
+%% load #profile from environment
+load_profile(E) ->
+    D = #profile{},
+    #profile {
+       screen_color = ?env(screen_color, E, D),
+       selection_alpha = ?env(selection_alpha, E, D),
+       selection_color = ?env(selection_color, E, D),
+       selection_border_width = ?env(selection_border_width, E, D),
+       selection_border_color = ?env(selection_border_color, E, D),
+       vertex_color           = ?env(vertex_color, E, D),
+       vertex_border_width     = ?env(vertex_border_width, E, D),
+       vertex_border_color    = ?env(vertex_border_color, E, D),
+       vertex_select_color    = ?env(vertex_select_color, E, D),
+       vertex_select_border_width = ?env(vertex_select_border_width,E,D),
+       vertex_select_border_color= ?env(vertex_select_border_color,E,D),
+       vertex_highlight_color = ?env(vertex_highlight_color,E,D),
+       vertex_highlight_border_width = ?env(vertex_highlight_border_width,E,D),
+       vertex_highlight_border_color = ?env(vertex_highlight_border_color,E,D),
+       edge_color = ?env(edge_color,E,D),
+       edge_select_color = ?env(edge_select_color,E,D),
+       edge_highlight_color = ?env(edge_highlight_color,E,D)
+      }.
 
 remove_vertices([V|Vs], G) ->
     remove_vertices(Vs, graph:remove_vertex(V, G));
@@ -538,15 +558,20 @@ flush_redraw(State) ->
 	    State
     end.
 
-draw(State = #state { graph = G, selected = Selected }) ->
-    epx:pixmap_fill(State#state.background_pixels,State#state.background_color),
+alpha_color(A,{_,R,G,B}) -> {A,R,G,B};
+alpha_color(A,{R,G,B}) -> {A,R,G,B};
+alpha_color(A,Name) when is_list(Name); is_atom(Name) ->
+    alpha_color(A, epx_color:from_name(Name)).
+
+draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
+    epx:pixmap_fill(State#state.background_pixels,Profile#profile.screen_color),
     epx_gc:set_fill_style(solid),
     Offset = if State#state.operation =:= move ->
 		     coords_sub(State#state.pt2,State#state.pt1);
 		true ->
 		     {0,0}
 	     end,
-    EdgeColor = State#state.edge_color,
+    EdgeColor = Profile#profile.edge_color,
     graph:fold_edges(
       fun(V,W,E,Acc) ->
 	      Vxy0 = get_vertex_coord(V, G),
@@ -569,53 +594,66 @@ draw(State = #state { graph = G, selected = Selected }) ->
 	      epx:draw_line(State#state.background_pixels,Vxy, Wxy),
 	      Acc
       end, [], G),
-    VertexColor = State#state.vertex_color,
+
+    VertexColor = Profile#profile.vertex_color,
     graph:fold_vertices(
       fun(V, Acc) ->
 	      Rect0 = vertex_rect(V, G),
 	      Rect = 
 		  case lists:member(V, Selected) of
 		      true ->
-			  epx_gc:set_border_width(2),
+			  epx_gc:set_border_width(
+			    Profile#profile.vertex_select_border_width),
 			  epx_gc:set_border_color(
-			    State#state.vertex_border_color),
+			    Profile#profile.vertex_select_border_color),
 			  rect_offset(Rect0, Offset);
 		      false ->
-			  epx_gc:set_border_width(0),
+			  epx_gc:set_border_width(
+			    Profile#profile.vertex_border_width),
+			  epx_gc:set_border_color(
+			    Profile#profile.vertex_border_color),
 			  Rect0
 		  end,
 	      %% high light vertext under pt2
 	      if State#state.operation =:= edge ->
 		      case point_in_rect(State#state.pt2, Rect) of
 			  true ->
-			      epx_gc:set_border_width(2),
+			      epx_gc:set_border_width(
+				Profile#profile.vertex_highlight_border_width),
 			      epx_gc:set_border_color(
-				State#state.vertex_highlight_color);
+				Profile#profile.vertex_highlight_border_color),
+			      epx_gc:set_fill_color(
+				Profile#profile.vertex_highlight_color);
 			  false ->
-			      ok
+			      Color = graph:get_vertex_by_id(V,color,G, 
+							     VertexColor),
+			      epx_gc:set_fill_color(Color)
 		      end;
 		 true ->
-		      ok
+		      Color = graph:get_vertex_by_id(V,color,G, 
+						     VertexColor),
+		      epx_gc:set_fill_color(Color)
 	      end,
-	      Color = graph:get_vertex_by_id(V, color, G, VertexColor),
-	      epx_gc:set_fill_color(Color),
 	      epx:draw_ellipse(State#state.background_pixels,Rect),
 	      Acc
       end, [], G),
 
-    epx_gc:set_border_width(1),
     if State#state.pt1 =:= false; State#state.pt2 =:= false -> 
 	    ok;
        true ->
 	    case State#state.operation of
 		select ->
 		    Rect = coords_to_rect(State#state.pt1,State#state.pt2),
-		    epx_gc:set_fill_color(State#state.select_color),
+		    epx_gc:set_border_width(
+		      Profile#profile.selection_border_width),
+		    Color = alpha_color(Profile#profile.selection_alpha,
+					Profile#profile.selection_color),
+		    epx_gc:set_fill_color(Color),
 		    epx_gc:set_fill_style(blend),
 		    epx:draw_rectangle(State#state.background_pixels, Rect);
 		edge ->
 		    epx_gc:set_foreground_color(
-		      State#state.edge_highlight_color),
+		      Profile#profile.edge_highlight_color),
 		    epx_gc:set_line_width(1),
 		    epx:draw_line(State#state.background_pixels,
 				  State#state.pt1,State#state.pt2);
