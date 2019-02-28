@@ -21,7 +21,6 @@
 
 -define(WIDTH,  800).
 -define(HEIGHT, 480).
--define(VERTEX_SIZE,  16).
 
 %% color profile with default values
 -record(profile,
@@ -31,6 +30,8 @@
 	 selection_color               = gray,
 	 selection_border_width        = 1,
 	 selection_border_color        = black,
+	 vertex_shape                  = circle,
+	 vertex_size                   = 16,
 	 vertex_color                  = darkgray,
 	 vertex_border_width           = 0,
 	 vertex_border_color           = black,
@@ -175,6 +176,7 @@ handle_cast(_Request, State) ->
 			 {noreply, NewState :: term(), hibernate} |
 			 {stop, Reason :: normal | term(), NewState :: term()}.
 handle_info({epx_event,W,Event}, State) when State#state.window =:= W ->
+    %% io:format("Epx event ~p\n", [Event]),
     handle_epx_event(Event, State);
 handle_info(Event, State)  ->
     io:format("Got event ~p\n", [Event]),
@@ -229,8 +231,14 @@ handle_epx_event(Event, State) ->
 	{button_press, [left], _Where={X,Y,_Z}} ->
 	    if State#state.ctrl ->  %% Add vertex
 		    Color = (State#state.profile)#profile.vertex_color,
-		    G1 = graph:put_vertex(make_ref(),
-					  [{x,X},{y,Y},{color,Color}],
+		    Size = (State#state.profile)#profile.vertex_size,
+		    Shape = (State#state.profile)#profile.vertex_shape,
+		    V = make_ref(),
+		    G1 = graph:put_vertex(V,
+					  [{x,X},{y,Y},
+					   {color,Color},
+					   {size,Size},
+					   {shape,Shape}],
 					  State#state.graph),
 		    invalidate(State),
 		    {noreply, State#state { operation = vertex,
@@ -238,7 +246,7 @@ handle_epx_event(Event, State) ->
 					    graph = G1 }};
 
 	       State#state.alt ->  %% Add edge
-		    case select(X,Y,State#state.graph,[]) of
+		    case select({X,Y},State#state.graph,[]) of
 			[] ->
 			    invalidate(State),
 			    {noreply, State#state { selected = [],
@@ -258,7 +266,7 @@ handle_epx_event(Event, State) ->
 		    epx:window_enable_events(Window,[motion]),
 		    invalidate(State),
 		    Sel0 = State#state.selected,
-		    case select(X,Y,State#state.graph,[]) of
+		    case select({X,Y},State#state.graph,[]) of
 			[] ->
 			    Sel = if State#state.shift -> Sel0; true -> [] end,
 			    {noreply,
@@ -320,7 +328,7 @@ handle_epx_event(Event, State) ->
 						    selected = Sel }};
 			edge ->
 			    invalidate(State),
-			    case select(X,Y,State#state.graph,[]) of
+			    case select({X,Y},State#state.graph,[]) of
 				[] ->
 				    {noreply, State#state { pt1 = false, 
 							    pt2 = false,
@@ -444,6 +452,8 @@ load_profile(E) ->
        selection_color = ?env(selection_color, E, D),
        selection_border_width = ?env(selection_border_width, E, D),
        selection_border_color = ?env(selection_border_color, E, D),
+       vertex_shape           = ?env(vertex_shape, E, D),
+       vertex_size            = ?env(vertex_size, E, D),
        vertex_color           = ?env(vertex_color, E, D),
        vertex_border_width     = ?env(vertex_border_width, E, D),
        vertex_border_color    = ?env(vertex_border_color, E, D),
@@ -470,21 +480,17 @@ move_vertices([V|Vs], Offset, G) ->
 move_vertices([], _Offset, G) ->
     G.
 
-select(X,Y,G,Selected) ->
-    Side2 = ?VERTEX_SIZE div 2,
+%% fixme only select first!
+select(Pos,G,Selected) ->
     graph:fold_vertices(
       fun(V, Sel) ->
 	      case lists:member(V, Sel) of
 		  false ->
-		      Xi = graph:get_vertex_by_id(V, x, G, 0)-Side2,
-		      if X >= Xi, X < Xi+?VERTEX_SIZE ->
-			      Yi = graph:get_vertex_by_id(V, y, G, 0)-Side2,
-			      if Y >= Yi, Y < Yi+?VERTEX_SIZE ->
-				      [V | Sel];
-				 true ->
-				      Sel
-			      end;
-			 true ->
+		      Rv = vertex_rect(V, G),
+		      case point_in_rect(Pos, Rv) of
+			  true ->
+			      [V | Sel];
+			  false ->
 			      Sel
 		      end;
 		  true ->
@@ -532,10 +538,14 @@ set_vertex_pos(V, G, {X,Y}) ->
     graph:put_vertex(V, [{x,X},{y,Y}], G).
 
 vertex_rect(V, G) ->
-    Side2 = ?VERTEX_SIZE div 2,
+    Size = graph:get_vertex_by_id(V, size, G, 16),
+    Side2 = Size div 2,
     X = graph:get_vertex_by_id(V, x, G, 0)-Side2,
     Y = graph:get_vertex_by_id(V, y, G, 0)-Side2,
-    {X,Y,?VERTEX_SIZE,?VERTEX_SIZE}.
+    {X,Y,Size,Size}.
+
+vertex_shape(V, G) ->
+    graph:get_vertex_by_id(V, shape, G, circle).
 
 rect_overlap(R1,R2) ->
     case epx_rect:intersect(R1, R2) of
@@ -634,7 +644,17 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 						     VertexColor),
 		      epx_gc:set_fill_color(Color)
 	      end,
-	      epx:draw_ellipse(State#state.background_pixels,Rect),
+	      case vertex_shape(V, G) of
+		  circle ->
+		      %% io:format("draw circle ~w\n", [Rect]),
+		      epx:draw_ellipse(State#state.background_pixels,Rect);
+		  square ->
+		      %% io:format("draw square rect ~w\n", [Rect]),
+		      epx:draw_rectangle(State#state.background_pixels,Rect);
+		  roundrect ->
+		      %% io:format("draw round rect ~w\n", [Rect]),
+		      epx:draw_roundrect(State#state.background_pixels,Rect,4,4)
+	      end,
 	      Acc
       end, [], G),
 
@@ -650,6 +670,7 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 					Profile#profile.selection_color),
 		    epx_gc:set_fill_color(Color),
 		    epx_gc:set_fill_style(blend),
+		    %% io:format("draw selection rect ~w\n", [Rect]),
 		    epx:draw_rectangle(State#state.background_pixels, Rect);
 		edge ->
 		    epx_gc:set_foreground_color(
