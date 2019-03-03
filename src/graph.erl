@@ -33,7 +33,7 @@
 -export([edges/1]).
 -export([number_of_edges/1]).
 -export([fold_edges/3, fold_xedges/3]).
--export([get_edge/4, get_edge/5]).
+-export([get_edge/3, get_edge/4, get_edge/5]).
 -export([get_edge_by_id/2, get_edge_by_id/3, get_edge_by_id/4]).
 
 -export([fold_out/4]).
@@ -287,6 +287,17 @@ get_edge_by_id(E, Key, #{?TYPE:=graph,e:=Es}) ->
 get_edge_by_id(E, Key, #{?TYPE:=graph,e:=Es}, Default) ->
     Ex = maps:get(E, Es),
     maps:get(Key,Ex,Default).
+
+%% get edge by vertices
+get_edge(A0,B0,#{?TYPE:=graph,e:=Es,v:=Vs,is_digraph:=Digraph}) ->
+    {A,B} = sort(A0,B0,Digraph),
+    Ax = maps:get(A,Vs),
+    Out = vertex_out_(Ax),
+    case lists:keyfind(B,1,Out) of
+	{B,E} ->
+	    Ex = maps:get(E,Es),
+	    filter_props(maps:to_list(Ex))
+    end.
 
 %% get edge by vertices
 get_edge(A0,B0,Key,#{?TYPE:=graph,e:=Es,v:=Vs,is_digraph:=Digraph}) ->
