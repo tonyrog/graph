@@ -12,6 +12,8 @@
 
 %% API
 -export([start/0]).
+-export([load_mac/1]).
+-export([color/1, shape/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -34,7 +36,7 @@
 	 vertex_width                  = 16,
 	 vertex_height                 = 16,
 	 vertex_color                  = darkgray,
-	 vertex_border_width           = 0,
+	 vertex_border_width           = 1,
 	 vertex_border_color           = black,
 	 vertex_select_color           = darkgreen,
 	 vertex_select_border_width    = 2,
@@ -86,6 +88,9 @@ start([TTYLogger]) ->
     application:ensure_all_started(epx),
     Opts = [{screen_width,Width},{screen_height,Height}],
     gen_server:start({local, ?SERVER}, ?MODULE, Opts, []).
+
+load_mac(File) ->
+    gen_server:call(?SERVER, {load_mac, File}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -149,9 +154,21 @@ init(Options) ->
 			 {noreply, NewState :: term(), hibernate} |
 			 {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
 			 {stop, Reason :: term(), NewState :: term()}.
+handle_call({load_mac,File}, _From, State) ->
+    case graph_mac:load(File) of
+	Error = {error,_Reason} ->
+	    {reply, Error, State};
+	{ok,GraphData} ->
+	    {G,Selected} = macgraph:import(GraphData),
+	    invalidate(State),
+	    {reply, ok, State#state { graph = G, 
+				      clip = undefined,
+				      selected = Selected}};
+	{_, _} ->
+	    {reply, {error, decode_problem}, State}
+    end;
 handle_call(_Request, _From, State) ->
-    Reply = ok,
-    {reply, Reply, State}.
+    {reply, {error,bad_call}, State}.
 
 %%--------------------------------------------------------------------
 %% @private
