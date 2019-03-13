@@ -12,7 +12,9 @@
 
 %% API
 -export([start/0]).
+-export([graph/1]).
 -export([load_mac/1]).
+-export([use_graph/1]).
 -export([color/1, shape/1]).
 
 %% gen_server callbacks
@@ -24,7 +26,7 @@
 -define(WIDTH,  800).
 -define(HEIGHT, 480).
 
--define(USE_OFF_SCREEN, false).
+-define(USE_OFF_SCREEN, true).
 -define(USE_EXPOSURE, false).
 
 %% color profile with default values
@@ -79,10 +81,13 @@
 %%% API
 %%%===================================================================
 
+graph(G) ->
+    start([true, {graph,G}]).
+
 start() ->
     start([true]).
 
-start([TTYLogger]) ->
+start([TTYLogger|Opts0]) ->
     (catch error_logger:tty(TTYLogger)),
     application:start(lager),
     application:load(epx),
@@ -93,11 +98,14 @@ start([TTYLogger]) ->
     Width  = application:get_env(graph, screen_width, ?WIDTH),
     Height = application:get_env(graph, screen_height, ?HEIGHT),
     application:ensure_all_started(epx),
-    Opts = [{screen_width,Width},{screen_height,Height}],
+    Opts = [{screen_width,Width},{screen_height,Height}|Opts0],
     gen_server:start({local, ?SERVER}, ?MODULE, Opts, []).
 
 load_mac(File) ->
     gen_server:call(?SERVER, {load_mac, File}).
+
+use_graph(G) ->
+    gen_server:call(?SERVER, {use_graph, G}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -120,6 +128,7 @@ init(Options) ->
     Env = Options ++ application:get_all_env(graph),
     Width  = proplists:get_value(screen_width, Env, ?WIDTH),
     Height = proplists:get_value(screen_height, Env, ?HEIGHT),
+    G = proplists:get_value(graph, Env, graph:new(false)),
     Profile = load_profile(Env),
     Backend = epx_backend:default(),
     Events = 
@@ -145,7 +154,7 @@ init(Options) ->
 		    profile = Profile,
 		    width  = Width,
 		    height = Height,
-		    graph = graph:new(false)
+		    graph = G
 		  },
     invalidate(State),
     {ok, State}.
@@ -177,6 +186,16 @@ handle_call({load_mac,File}, _From, State) ->
 				      selected = Selected}};
 	{_, _} ->
 	    {reply, {error, decode_problem}, State}
+    end;
+handle_call({use_graph,G}, _From, State) ->
+    case graph:is_graph(G) of
+	true ->
+	    invalidate(State),
+	    {reply, ok, State#state { graph = G,
+				      clip = undefined,
+				      selected = []}};
+	false ->
+	    {reply, {error, einval}, State}
     end;
 handle_call(_Request, _From, State) ->
     {reply, {error,bad_call}, State}.
@@ -488,7 +507,8 @@ handle_epx_event(Event, State) ->
 	    %% io:format("Configure x=~w,y=~w,w=~w,h=~w\n", [_X,_Y,W,H]),
 	    Pixels = resize_pixmap(State#state.pixels,W,H),
 	    State1 = State#state { pixels = Pixels, width=W, height=H },
-	    if not ?USE_EXPOSURE -> draw(State1);
+	    if not ?USE_EXPOSURE, Pixels =/= State#state.pixels ->
+		    draw(State1);
 	       true -> ok
 	    end,
 	    {noreply, State1};
