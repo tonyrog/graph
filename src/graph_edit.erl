@@ -24,6 +24,9 @@
 -define(WIDTH,  800).
 -define(HEIGHT, 480).
 
+-define(USE_OFF_SCREEN, false).
+-define(USE_EXPOSURE, false).
+
 %% color profile with default values
 -record(profile,
 	{
@@ -83,6 +86,8 @@ start([TTYLogger]) ->
     (catch error_logger:tty(TTYLogger)),
     application:start(lager),
     application:load(epx),
+    application:set_env(epx, use_off_screen, ?USE_OFF_SCREEN),
+    application:set_env(epx, use_exposure, ?USE_EXPOSURE),
     %% epx:debug(debug),
     application:load(graph),
     Width  = application:get_env(graph, screen_width, ?WIDTH),
@@ -117,11 +122,17 @@ init(Options) ->
     Height = proplists:get_value(screen_height, Env, ?HEIGHT),
     Profile = load_profile(Env),
     Backend = epx_backend:default(),
-    Window = epx:window_create(40, 40, Width, Height,
-			        [key_press,key_release,
-				 wheel, left,  %% motion-left-button
-				 configure, resize,
-				 button_press,button_release]),
+    Events = 
+	[key_press,key_release,
+	 wheel, left,  %% motion-left-button
+	 configure,    %% resize,
+	 button_press,button_release] ++
+	if ?USE_EXPOSURE -> [expose];
+	   true -> []
+	end,
+
+    Window = epx:window_create(40, 40, Width, Height, Events),
+			       
     epx:window_attach(Window, Backend),
     epx:window_adjust(Window, [{name, "MacGraph2"}]),
 
@@ -473,21 +484,19 @@ handle_epx_event(Event, State) ->
 		  end,
 	    {noreply, State#state { shift = Shift, ctrl = Ctrl, alt = Alt }};
 
-	{resize, {W,H,_D}} -> %% NOT WORKING!!! X11 problem. Use configure
-	    io:format("Resize to w=~w, h=~w\n", [W,H]),
+	{configure, {_X,_Y,W,H}} ->
+	    %% io:format("Configure x=~w,y=~w,w=~w,h=~w\n", [_X,_Y,W,H]),
 	    Pixels = resize_pixmap(State#state.pixels,W,H),
-	    epx:window_adjust(State#state.window, [{width,W},{height,H}]),
-	    State1 = State#state { pixels = Pixels },
-	    invalidate(State1),
+	    State1 = State#state { pixels = Pixels, width=W, height=H },
+	    if not ?USE_EXPOSURE -> draw(State1);
+	       true -> ok
+	    end,
 	    {noreply, State1};
 
-	{configure, {_X,_Y,W,H}} ->
-	    io:format("Configure to x=~w,y=~w,w=~w,h=~w\n", [_X,_Y,W,H]),
-	    Pixels = resize_pixmap(State#state.pixels,W,H),
-	    State1 = State#state { pixels = Pixels },
-	    draw(State1),
-	    epx:window_adjust(State#state.window, [{width,W},{height,H}]),
-	    {noreply, State1};
+	{expose, {_X,_Y,_W,_H}} ->
+	    %% io:format("Expose x=~w,y=~w,w=~w,h=~w\n", [_X,_Y,_W,_H]),
+	    draw(State),
+	    {noreply, State};
 	
 	redraw ->
 	    flush_redraw(State),
@@ -585,13 +594,13 @@ graph_command($G, _Selected, State) ->
 	   end,
     State#state { grid = Grid };
 graph_command($+, _Selected, State) ->
-    %% fixme: make fixed steps? more predictable
+    %% fixme: make fixed steps? more predictable (yes!)
     Zoom = min(100.0, State#state.zoom * 1.07),
-    io:format("Zoom factor ~w\n", [Zoom]),
+    %% io:format("Zoom factor ~w\n", [Zoom]),
     State#state { zoom = Zoom };
 graph_command($-, _Selected, State) ->
     Zoom = max(0.01, State#state.zoom / 1.07),
-    io:format("Zoom factor ~w\n", [Zoom]),
+    %% io:format("Zoom factor ~w\n", [Zoom]),
     State#state { zoom = Zoom };
     
 graph_command(Command, _Selected, State) ->
@@ -671,7 +680,7 @@ resize_pixmap(Pixmap, W, H) ->
 next_pixmap(W,H) ->
     NPW = 1 bsl ceil(math:log2(W)),
     NPH = 1 bsl ceil(math:log2(H)),
-    epx:pixmap_create(NPW, NPH).
+    epx:pixmap_create(NPW, NPH, argb).
 
 complete_graph(Vs, G, State) ->
     lists:foldl(
@@ -903,6 +912,7 @@ alpha_color(A,Name) when is_list(Name); is_atom(Name) ->
     alpha_color(A, epx_color:from_name(Name)).
 
 draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
+    %% io:format("Draw\n"),
     Zoom = State#state.zoom,
     Grid = State#state.grid,
     epx:pixmap_fill(State#state.pixels,Profile#profile.screen_color),
@@ -912,6 +922,12 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 		true ->
 		     {0,0}
 	     end,
+    %% Draw info bar
+    %%   Zoom
+    %% | 1%       Pt1                  Pt2        Delta 
+    %% | 10000% | x:-1000.0 y:1000.2 | x:0  y:0 | dx:0  dy:0 | x:16 y:16 |
+    %% 
+
     EdgeColor = Profile#profile.edge_color,
     graph:fold_edges(
       fun(V,W,E,Acc) ->
