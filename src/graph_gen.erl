@@ -38,7 +38,7 @@ add_vertices(I, W, H, Vs, G) ->
 add_edges([{_R,{I,J}}|Es], Vs, G) ->
     V = element(I, Vs),
     W = element(J, Vs),
-    G1 = graph:put_edge(V, W, [{color,black}], G),
+    G1 = graph:put_edge(V, W, [{color,0}], G),
     add_edges(Es, Vs, G1);
 add_edges([], _Vs, G) ->
     G.

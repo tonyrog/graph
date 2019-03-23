@@ -36,7 +36,7 @@ greedy_(_G, [], Color) ->
     Color.
 
 first_available(List) ->
-    first_available_(0, lists:sort(List)).
+    first_available_(0, lists:usort(List)).
 
 first_available_(I, [C|_Cs]) when I < C -> I;
 first_available_(I, [I|Cs]) -> first_available_(I+1, Cs);
