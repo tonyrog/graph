@@ -160,7 +160,7 @@ import({#graph_data{nVertices=_Nv,nEdges=_Ne},Elements,_Tail}) ->
     import(Elements, graph:new(), [], #{}).
 
 import([{node,Name,GD,VD,ND}|Es], G, Selected, Vmap) ->
-    V = make_ref(),
+    V = graph:unique_vertex(),
     #vertex_data { theEnum = TheEnum } = VD,
     #node_data{thePosition=P, theColor=Color} = ND,
     #point{ v=Y, h=X} = P,

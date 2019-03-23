@@ -28,10 +28,10 @@ uniform(V, E) ->
 add_vertices(0, _W, _H, Vs, G) ->
     {G, list_to_tuple(lists:reverse(Vs))};
 add_vertices(I, W, H, Vs, G) ->
-    V = make_ref(),
+    V = graph:unique_vertex(),
     X = rand:uniform(W),
     Y = rand:uniform(H),
-    Attr = [{x,X},{y,Y},{color,red},{width,16},{height,16},{shape,ellipse}],
+    Attr = [{x,X},{y,Y},{color,0},{width,16},{height,16},{shape,ellipse}],
     G1 = graph:put_vertex(V, Attr, G),
     add_vertices(I-1, W, H, [V|Vs], G1).
 

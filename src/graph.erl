@@ -46,13 +46,16 @@
 -export([in_edges/2]).
 -export([fanin/2]).
 
+-export([unique_edge/0, unique_vertex/0]).
+-export([save/2, load/1]).
+
 %% internal edge/vertex attributes
--define(ID,   '$ID').
--define(TYPE, '$TYPE').
+-define(ID,   id).
+-define(TYPE, type).
 -define(IN,   '$IN').
 -define(OUT,  '$OUT').
--define(PT1,  '$PT1').
--define(PT2,  '$PT2').
+-define(PT1,  pt1).
+-define(PT2,  pt2).
 
 %%
 %% Vertex
@@ -74,7 +77,6 @@
 %%    e2         #{ id=e2, pt1 => a, pt2 => c
 %%    e3         #{ id=e3, pt1 => d, pt2 => b
 %%
-%%
 
 new() ->
     new(true).
@@ -85,6 +87,77 @@ new(Digraph) when is_boolean(Digraph) ->
        e => #{},
        v => #{}
      }.
+
+save(File, G) ->
+    case file:open(File, [write]) of
+	{ok,Fd} ->
+	    try save_(Fd, G) of
+		R -> R
+	    after
+		file:close(Fd)
+	    end;
+	Error -> Error
+    end.
+
+save_(Fd, G) ->
+    io:format(Fd, "~p.\n", [maps_remove_list([e,v], G)]),
+    fold_xvertices(
+      fun(Vx0,_Acc) ->
+	      Vx1 = maps_remove_list([?IN,?OUT], Vx0),
+	      io:format(Fd, "~p.\n", [Vx1])
+      end, ok, G),
+    fold_xedges(
+      fun(Ex0,_Acc) ->
+	      io:format(Fd, "~p.\n", [Ex0])
+      end, ok, G).
+
+load(File) ->
+    case file:open(File, [read]) of
+	{ok,Fd} ->
+	    try load_(Fd) of
+		G -> {ok,G}
+	    after
+		file:close(Fd)
+	    end;
+	Error -> Error
+    end.
+
+load_(Fd) ->
+    G0 = io:read('', Fd),
+    G1 = G0#{ v => #{}, e => #{}},
+    load_elems_(Fd, G1, #{}).
+
+load_elems_(Fd, G = #{ v := Vs0 }, IDMap) ->
+    case io:read('', Fd) of
+	eof -> G;
+	Vx = #{ ?ID := ID, type := vertex } ->
+	    {ID1,IDMap1} =
+		case is_unique_vertex(ID) of
+		    true ->
+			IDv = unique_vertex(),
+			{IDv, maps:put(ID, IDv, IDMap)};
+		    false ->
+			{ID, IDMap}
+		end,
+	    Vx1 = Vx#{ ?ID => ID1, ?IN => [], ?OUT => []},
+	    G1 = G#{ v => Vs0# { ID1 => Vx1 }},
+	    load_elems_(Fd, G1, IDMap1);
+
+	Ex = #{ ?ID := ID, type := edge, ?PT1 := A, ?PT2 := B } ->
+	    {ID1,IDMap1} =
+		case is_unique_edge(ID) of
+		    true ->
+			IDe = unique_edge(),
+			{IDe, maps:put(ID, IDe, IDMap)};
+		    flase ->
+			{ID, IDMap}
+		end,
+	    Av = maps:get(A, IDMap1),
+	    Bv = maps:get(B, IDMap1),
+	    Props = filter_props(maps:to_list(Ex)),
+	    G1 = insert_edge_(Av,Bv,ID1,Props,G),
+	    load_elems_(Fd, G1, IDMap1)
+    end.
 
 is_graph(#{ ?TYPE := graph }) -> true;
 is_graph(_) -> false.
@@ -212,7 +285,7 @@ put_edge(A0,B0,Props,G=#{ ?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
 		    io:format("no cycles accepted yet\n", []),
 		    G;
 	       true ->
-		    insert_edge_(A,B,make_ref(),Props,G)
+		    insert_edge_(A,B,unique_edge(),Props,G)
 	    end
     end.
 
@@ -222,9 +295,9 @@ insert_edge_(A,B,E,Props,G=#{?TYPE:=graph}) when A =/= B ->
     add_edge_(A,B,E,Ex,Props,G).
 
 add_edge_(A,B,E,Ex,Props0,G=#{?TYPE:=graph,e:=Es0,v:=Vs0}) when A =/= B ->
-    Ax = put_vertex_(A,[],Vs0),
+    Ax  = put_vertex_(A,[],Vs0),
     Ax1 = add_edge_out_({B,E}, Ax),
-    Bx = put_vertex_(B,[],Vs0),
+    Bx  = put_vertex_(B,[],Vs0),
     Bx1 = add_edge_in_({A,E}, Bx),
     Ex1 = if Props0 =:= [] -> Ex;
 	     true -> 
@@ -332,8 +405,11 @@ fold_out(Fun, Acc, V, #{?TYPE:=graph,v:=Vs,is_digraph:=Digraph}) ->
 	    lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
 			Acc, vertex_out_(Vx));
 	false ->
-	    lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
-			Acc, vertex_out_(Vx) ++ vertex_in_(Vx))
+	    Acc1 = lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			       Acc, vertex_out_(Vx)),
+	    Acc2 = lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			       Acc1, vertex_in_(Vx)),
+	    Acc2
     end.
 
 out_edges(V, G = #{?TYPE:=graph}) ->
@@ -350,8 +426,7 @@ fanout(V, #{?TYPE:=graph, v:=Vs, is_digraph:=Digraph}) ->
     Vx = maps:get(V, Vs),
     case Digraph of
 	true -> length(vertex_out_(Vx));
-	false ->length(vertex_out_(Vx)) +
-		    length(vertex_in_(Vx))
+	false -> length(vertex_out_(Vx)) + length(vertex_in_(Vx))
     end.
 
 %% @doc
@@ -366,8 +441,11 @@ fold_in(Fun, Acc, V, #{?TYPE:=graph,v:=Vs,is_digraph:=Digraph}) ->
 	    lists:foldl(fun({W,E},Ai) -> Fun(W,V,E,Ai) end, 
 			Acc, vertex_in_(Vx));
 	false ->
-	    lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
-			Acc, vertex_out_(Vx) ++ vertex_in_(Vx))
+	    Acc1 = lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			       Acc, vertex_out_(Vx)),
+	    Acc2 = lists:foldl(fun({W,E},Ai) -> Fun(V,W,E,Ai) end, 
+			       Acc1, vertex_in_(Vx)),
+	    Acc2
     end.
 
 in_edges(V, G = #{?TYPE:=graph}) ->
@@ -532,3 +610,21 @@ is_internal_prop(_) -> false.
 
 filter_props(Prop) ->
     lists:filter(fun({K,_V}) -> not is_internal_prop(K) end, Prop).
+
+maps_remove_list([K|Ks], Map) ->
+    maps_remove_list(Ks, maps:remove(K, Map));
+maps_remove_list([], Map) ->
+    Map.
+
+is_unique_edge(['$e'|I]) when is_integer(I) -> true;
+is_unique_edge(_) -> false.
+    
+
+unique_edge() ->
+    ['$e'|erlang:unique_integer([positive])].
+
+is_unique_vertex(['$v'|I]) when is_integer(I) -> true;
+is_unique_vertex(_) -> false.
+
+unique_vertex() ->
+    ['$v'|erlang:unique_integer([positive])].

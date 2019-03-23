@@ -15,7 +15,7 @@
 -export([graph/1]).
 -export([load_mac/1]).
 -export([use_graph/1]).
--export([color/1, shape/1]).
+-export([shape/1]).
 
 %% gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -32,24 +32,25 @@
 %% color profile with default values
 -record(profile,
 	{
-	 screen_color                  = beige,
+	 scheme                        = xterm,
+	 screen_color                  = darkslategrey2,
 	 selection_alpha               = 100,
-	 selection_color               = gray,
+	 selection_color               = grey,
 	 selection_border_width        = 1,
 	 selection_border_color        = black,
 	 vertex_shape                  = ellipse,
 	 vertex_width                  = 16,
 	 vertex_height                 = 16,
-	 vertex_color                  = darkgray,
+	 vertex_color                  = grey58,
 	 vertex_border_width           = 1,
 	 vertex_border_color           = black,
 	 vertex_select_color           = darkgreen,
 	 vertex_select_border_width    = 2,
 	 vertex_select_border_color    = black,
-	 vertex_highlight_color        = darkgray,
+	 vertex_highlight_color        = grey69,
 	 vertex_highlight_border_width = 2,
 	 vertex_highlight_border_color = red,
-	 edge_color                    = darkgray,
+	 edge_color                    = 0,
 	 edge_select_color             = darkgreen,
 	 edge_highlight_color          = white
 	}).
@@ -281,11 +282,12 @@ handle_epx_event(Event, State) ->
 	{button_press, [left], _Where={Xm,Ym,_Zm}} ->
 	    XY = {X,Y} = izm(Xm,Ym,State#state.zoom),
 	    if State#state.ctrl ->  %% Add vertex
-		    Color = (State#state.profile)#profile.vertex_color,
-		    Width = (State#state.profile)#profile.vertex_width,
-		    Height = (State#state.profile)#profile.vertex_height,
-		    Shape = (State#state.profile)#profile.vertex_shape,
-		    V = make_ref(),
+		    Profile = State#state.profile, 
+		    Color = Profile#profile.vertex_color,
+		    Width = Profile#profile.vertex_width,
+		    Height = Profile#profile.vertex_height,
+		    Shape = Profile#profile.vertex_shape,
+		    V = graph:unique_vertex(),
 		    G1 = graph:put_vertex(V,
 					  [{x,X},{y,Y},
 					   {color,Color},
@@ -397,9 +399,10 @@ handle_epx_event(Event, State) ->
 							     operation = none }};
 				[W|_] ->
 				    [V] = State1#state.selected,
-				    Color = (State1#state.profile)#profile.edge_color,
+				    Profile = State1#state.profile,
+				    EdgeColor = Profile#profile.edge_color,
 				    G = graph:put_edge(V, W, 
-						       [{color,Color}],
+						       [{color,EdgeColor}],
 						       State1#state.graph),
 				    {noreply, State1#state { pt1 = undefined,
 							     pt2 = undefined,
@@ -541,6 +544,24 @@ handle_epx_event(Event, State) ->
 	    {noreply,State}
     end.
 
+%%
+%% key commands:
+%%   up / down / left / right move selected graph
+%%   ctrl 0 - 9               set color on selected vertices
+%%   alt  0 - 9               set shape on selected vertices
+%%   \b                       delete selected vertices
+%%   ctrl x                   cut selected vertices to clipboard
+%%   ctrl c                   copy selected vertices to clipboard
+%%   ctrl v                   paste graph from clipboard
+%%   ctrl s                   save graph go "graph.g"
+%%   C                        complete selected sub graph
+%%   I                        complement selected sub graph
+%%   G                        toggle snap to grid 
+%%   +                        zoom in
+%%   -                        zoom out
+%%   r                        greedy color graph
+%%   R                        minimal color graph
+
 graph_command(up, Selected, State) ->
     Dir = case State#state.grid of
 	      undefined -> {0,-1};
@@ -571,7 +592,7 @@ graph_command(right, Selected, State) ->
     State#state { graph=G };
 graph_command(Command, Selected, State) when Command >= $0, Command =< $9,
 					     State#state.ctrl ->
-    G = set_vertices(Selected, [{color,color(Command-$0)}],State#state.graph),
+    G = set_vertices(Selected, [{color,Command-$0}],State#state.graph),
     State#state { graph=G };
 graph_command(Command, Selected, State) when Command >= $0, Command =< $9,
 					     State#state.alt ->
@@ -601,6 +622,9 @@ graph_command($v, _Selected, State) when State#state.ctrl ->
 	  end,
     {G,Vs} = paste_graph(State#state.graph, State#state.clip, Pos),
     State#state { graph=G, selected = Vs };
+graph_command($s, _Selected, State) when State#state.ctrl ->
+    graph:save("graph.g", State#state.graph),
+    State;
 graph_command($C, Selected, State) ->
     G = complete_graph(Selected, State#state.graph, State),
     State#state { graph=G };
@@ -622,22 +646,18 @@ graph_command($-, _Selected, State) ->
     Zoom = max(0.01, State#state.zoom / 1.07),
     %% io:format("Zoom factor ~w\n", [Zoom]),
     State#state { zoom = Zoom };
+
+graph_command($r, _Selected, State) ->
+    ColorMap = graph_color:greedy(State#state.graph),
+    io:format("Colors = ~p\n", [ColorMap]),
+    G = maps:fold(fun(V,Color,Gi) ->
+			  graph:put_vertex(V, [{color,Color}], Gi)
+		  end, State#state.graph, ColorMap),
+    State#state { graph = G };
     
 graph_command(Command, _Selected, State) ->
     io:format("Command = ~p\n", [Command]),
     State.
-
-color(0) -> gray;
-color(1) -> red;
-color(2) -> green;
-color(3) -> blue;
-color(4) -> brown;
-color(5) -> yellow;
-color(6) -> orange;
-color(7) -> purple;
-color(8) -> drakgreen;
-color(9) -> lightgreen;
-color(_) -> gray.
 
 shape(0) -> ellipse;
 shape(1) -> rectangle;
@@ -645,8 +665,11 @@ shape(2) -> roundrect;
 shape(3) -> triangle;
 shape(_) -> ellipse.
 
--define(env(Key, Env, Default),
+-define(ld(Key, Env, Default),
 	proplists:get_value(Key, Env, Default#profile.Key)).
+
+-define(ldc(Scheme, Key, Env, Default),
+	color_number(Scheme, ?ld(Key,Env,Default))).
 
 %% load #profile from environment
 load_profile(E) ->
@@ -655,31 +678,33 @@ load_profile(E) ->
     {Width,Height} =
 	case proplists:get_value(size, E, unset) of
 	    unset ->
-		{?env(vertex_width, E, D),?env(vertex_height, E, D)};
+		{?ld(vertex_width, E, D),?ld(vertex_height, E, D)};
 	    Size ->
 		{Size, Size}
 	end,
+    S = ?ld(scheme, E, D),
     #profile {
-       screen_color = ?env(screen_color, E, D),
-       selection_alpha = ?env(selection_alpha, E, D),
-       selection_color = ?env(selection_color, E, D),
-       selection_border_width = ?env(selection_border_width, E, D),
-       selection_border_color = ?env(selection_border_color, E, D),
-       vertex_shape           = ?env(vertex_shape, E, D),
+       scheme = S,
+       screen_color = ?ldc(S,screen_color, E, D),
+       selection_alpha = ?ld(selection_alpha, E, D),
+       selection_color = ?ldc(S,selection_color, E, D),
+       selection_border_width = ?ld(selection_border_width, E, D),
+       selection_border_color = ?ldc(S,selection_border_color, E, D),
+       vertex_shape           = ?ld(vertex_shape, E, D),
        vertex_width           = Width,
        vertex_height          = Height,
-       vertex_color           = ?env(vertex_color, E, D),
-       vertex_border_width     = ?env(vertex_border_width, E, D),
-       vertex_border_color    = ?env(vertex_border_color, E, D),
-       vertex_select_color    = ?env(vertex_select_color, E, D),
-       vertex_select_border_width = ?env(vertex_select_border_width,E,D),
-       vertex_select_border_color= ?env(vertex_select_border_color,E,D),
-       vertex_highlight_color = ?env(vertex_highlight_color,E,D),
-       vertex_highlight_border_width = ?env(vertex_highlight_border_width,E,D),
-       vertex_highlight_border_color = ?env(vertex_highlight_border_color,E,D),
-       edge_color = ?env(edge_color,E,D),
-       edge_select_color = ?env(edge_select_color,E,D),
-       edge_highlight_color = ?env(edge_highlight_color,E,D)
+       vertex_color           = ?ldc(S,vertex_color, E, D),
+       vertex_border_width     = ?ld(vertex_border_width, E, D),
+       vertex_border_color    = ?ldc(S,vertex_border_color, E, D),
+       vertex_select_color    = ?ldc(S,vertex_select_color, E, D),
+       vertex_select_border_width=?ld(vertex_select_border_width,E,D),
+       vertex_select_border_color=?ldc(S,vertex_select_border_color,E,D),
+       vertex_highlight_color=?ldc(S,vertex_highlight_color,E,D),
+       vertex_highlight_border_width=?ld(vertex_highlight_border_width,E,D),
+       vertex_highlight_border_color=?ldc(S,vertex_highlight_border_color,E,D),
+       edge_color = ?ldc(S,edge_color,E,D),
+       edge_select_color = ?ldc(S,edge_select_color,E,D),
+       edge_highlight_color = ?ldc(S,edge_highlight_color,E,D)
       }.
 
 resize_pixmap(undefined, W, H) ->
@@ -738,7 +763,7 @@ complement_graph(Vs, G, State) ->
 %% copy a graph H into existing graph G on new coordinates
 paste_graph(G, H, {X,Y}) ->
     Vs = graph:vertices(H),
-    Map = maps:from_list([{V,make_ref()}||V <- Vs]),
+    Map = maps:from_list([{V,graph:unique_vertex()}||V <- Vs]),
     Gn1 = lists:foldl(
 	    fun(V,Gi) ->
 		    Props0 = graph:get_vertex_by_id(V, H),
@@ -762,7 +787,7 @@ paste_graph(G, H, {X,Y}) ->
 %% Copy selected vertices in G into a new graph
 copy_graph(Vs, G) ->
     Gn = graph:new(false),
-    Map = maps:from_list([{V,make_ref()}||V <- Vs]),
+    Map = maps:from_list([{V,graph:unique_vertex()}||V <- Vs]),
     Gn1 = lists:foldl(
 	    fun(V,Gi) -> 
 		    Props = graph:get_vertex_by_id(V, G),
@@ -931,11 +956,14 @@ alpha_color(A,{R,G,B}) -> {A,R,G,B};
 alpha_color(A,Name) when is_list(Name); is_atom(Name) ->
     alpha_color(A, epx_color:from_name(Name)).
 
+%% FIXME when using operation=move only draw the selected subgraph
+%% avoid redraw all node
 draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
-    %% io:format("Draw\n"),
     Zoom = State#state.zoom,
     Grid = State#state.grid,
-    epx:pixmap_fill(State#state.pixels,Profile#profile.screen_color),
+    Scheme = Profile#profile.scheme,
+    ScreenColor = profile_color(Scheme, Profile#profile.screen_color),
+    epx:pixmap_fill(State#state.pixels,ScreenColor),
     epx_gc:set_fill_style(solid),
     Offset = if State#state.operation =:= move ->
 		     coords_sub(State#state.pt2,State#state.pt1);
@@ -947,8 +975,7 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
     %% | 1%       Pt1                  Pt2        Delta 
     %% | 10000% | x:-1000.0 y:1000.2 | x:0  y:0 | dx:0  dy:0 | x:16 y:16 |
     %% 
-
-    EdgeColor = Profile#profile.edge_color,
+    EdgeColor = profile_color(Scheme, Profile#profile.edge_color),
     graph:fold_edges(
       fun(V,W,E,Acc) ->
 	      Vxy0 = get_vertex_coord(V, G),
@@ -966,13 +993,18 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 	      Wxy2 = snap(Wxy1, Grid),
 	      Wxy3 = scale(Wxy2, Zoom),
 	      Color = graph:get_edge_by_id(E, color, G, EdgeColor),
-	      epx_gc:set_foreground_color(Color),
+	      RGB = profile_color(Scheme, Color),
+	      epx_gc:set_foreground_color(RGB),
 	      epx_gc:set_line_width(zm(1,Zoom)),
 	      epx:draw_line(State#state.pixels,Vxy3, Wxy3),
 	      Acc
       end, [], G),
 
-    VertexColor = Profile#profile.vertex_color,
+    VertexColor = profile_color(Scheme, Profile#profile.vertex_color),
+    VertexSelectBorderColor = profile_color(Scheme,Profile#profile.vertex_select_border_color),
+    VertexBorderColor = profile_color(Scheme,Profile#profile.vertex_border_color),
+    VertexHighLightColor = profile_color(Scheme, Profile#profile.vertex_highlight_color),
+    VertexHighLightBorderColor = profile_color(Scheme, Profile#profile.vertex_highlight_border_color),
     graph:fold_vertices(
       fun(V, Acc) ->
 	      Rect0 = vertex_rect(V, G),
@@ -981,12 +1013,12 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 		      true ->
 			  Bw1 = zm(Profile#profile.vertex_select_border_width,Zoom),
 			  epx_gc:set_border_width(Bw1),
-			  epx_gc:set_border_color(Profile#profile.vertex_select_border_color),
+			  epx_gc:set_border_color(VertexSelectBorderColor),
 			  rect_offset(Rect0, Offset);
 		      false ->
 			  Bw2 = zm(Profile#profile.vertex_border_width,Zoom),
 			  epx_gc:set_border_width(Bw2),
-			  epx_gc:set_border_color(Profile#profile.vertex_border_color),
+			  epx_gc:set_border_color(VertexBorderColor),
 			  Rect0
 		  end,
 	      Rect2 = snap(Rect1, Grid),
@@ -998,29 +1030,26 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 			  true ->
 			      Bw3 = zm(Profile#profile.vertex_highlight_border_width,Zoom),
 			      epx_gc:set_border_width(Bw3),
-			      epx_gc:set_border_color(
-				Profile#profile.vertex_highlight_border_color),
-			      epx_gc:set_fill_color(
-				Profile#profile.vertex_highlight_color);
+			      epx_gc:set_border_color(VertexHighLightBorderColor),
+			      epx_gc:set_fill_color(VertexHighLightColor);
 			  false ->
 			      Color = graph:get_vertex_by_id(V,color,G, 
 							     VertexColor),
-			      epx_gc:set_fill_color(Color)
+			      RGB = profile_color(Scheme, Color),
+			      epx_gc:set_fill_color(RGB)
 		      end;
 		 true ->
 		      Color = graph:get_vertex_by_id(V,color,G, 
 						     VertexColor),
-		      epx_gc:set_fill_color(Color)
+		      RGB = profile_color(Scheme, Color),
+		      epx_gc:set_fill_color(RGB)
 	      end,
 	      case vertex_shape(V, G) of
 		  ellipse ->
-		      %% io:format("draw circle ~w\n", [Rect]),
 		      epx:draw_ellipse(State#state.pixels,Rect);
 		  rectangle ->
-		      %% io:format("draw square rect ~w\n", [Rect]),
 		      epx:draw_rectangle(State#state.pixels,Rect);
 		  roundrect ->
-		      %% io:format("draw round rect ~w\n", [Rect]),
 		      Rw = zm(8, Zoom),
 		      Rh = zm(8, Zoom),
 		      epx:draw_roundrect(State#state.pixels,Rect,Rw,Rh);
@@ -1035,6 +1064,8 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 	      Acc
       end, [], G),
 
+    SelectionColor = profile_color(Scheme, Profile#profile.selection_color),
+    EdgeHighLightColor = profile_color(Scheme, Profile#profile.edge_highlight_color),
     if State#state.pt1 =:= undefined; State#state.pt2 =:= undefined -> 
 	    ok;
        true ->
@@ -1043,15 +1074,13 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 		    Bw4 = zm(Profile#profile.selection_border_width,Zoom),
 		    epx_gc:set_border_width(Bw4),
 		    Color = alpha_color(Profile#profile.selection_alpha,
-					Profile#profile.selection_color),
+					SelectionColor),
 		    epx_gc:set_fill_color(Color),
 		    epx_gc:set_fill_style(blend),
 		    Rect = scale(coords_to_rect(State#state.pt1,State#state.pt2), Zoom),
-		    %% io:format("draw selection rect ~w\n", [Rect]),
 		    epx:draw_rectangle(State#state.pixels, Rect);
 		edge ->
-		    epx_gc:set_foreground_color(
-		      Profile#profile.edge_highlight_color),
+		    epx_gc:set_foreground_color(EdgeHighLightColor),
 		    epx_gc:set_line_width(zm(1,Zoom)),
 		    Pt1 = scale(State#state.pt1, Zoom),
 		    Pt2 = scale(State#state.pt2, Zoom),
@@ -1064,6 +1093,27 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 		    0, 0, 0, 0, 
 		    State#state.width, State#state.height).
 
+profile_color(_Scheme, RGB) when is_tuple(RGB) -> 
+    RGB;
+profile_color(Scheme, Index) when is_integer(Index) ->
+    Map = graph_palette:color_to_rgb(Scheme),
+    maps:get(Index, Map);
+profile_color(Scheme, Name) when is_atom(Name) ->
+    Map = graph_palette:color_from_name(Scheme),
+    profile_color(Scheme, maps:get(Name, Map));
+profile_color(Scheme, Name) when is_list(Name) ->
+    Map = graph_palette:color_from_name(Scheme),
+    profile_color(Scheme, maps:get(string:lowercase(Name), Map)).
+
+color_number(_Scheme, Index) when is_integer(Index) -> Index;
+color_number(Scheme, Name) when is_atom(Name) ->
+    Map = graph_palette:color_from_name(Scheme),
+    maps:get(Name, Map);
+color_number(Scheme, Name) when is_list(Name) ->
+    Map = graph_palette:color_from_name(Scheme),
+    maps:get(string:lowercase(Name), Map).
+
+    
 zm(W,Zoom) -> max(1, W*Zoom).
 zm(X,Y,Zoom) -> {X*Zoom, Y*Zoom}.
 
