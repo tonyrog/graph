@@ -25,15 +25,16 @@
 -export([vertices/1]).
 -export([number_of_vertices/1]).
 -export([fold_vertices/3,fold_xvertices/3]).
-
--export([is_edge/2, is_edge/3, edge/2, edge/3]).
+-export([vertex_iterator/1, vertex_next/1]).
+-export([is_edge/2, is_edge/3, edge/3]).
 -export([put_edge/3, put_edge/4]).
 -export([put_edge_by_id/3, put_edge_by_id/5]).
 -export([remove_edge/2, remove_edge/3]).
 -export([edges/1]).
 -export([number_of_edges/1]).
 -export([fold_edges/3, fold_xedges/3]).
--export([get_edge/3, get_edge/4, get_edge/5]).
+-export([edge_iterator/1, edge_next/1]).
+-export([get_edge/2, get_edge/3, get_edge/4, get_edge/5]).
 -export([get_edge_by_id/2, get_edge_by_id/3, get_edge_by_id/4]).
 
 -export([fold_out/4]).
@@ -115,7 +116,9 @@ load(File) ->
     case file:open(File, [read]) of
 	{ok,Fd} ->
 	    try load_(Fd) of
-		G -> {ok,G}
+		eof -> {error, nograph};
+		Error = {error,_} -> Error;
+		{ok,G} -> G
 	    after
 		file:close(Fd)
 	    end;
@@ -123,14 +126,19 @@ load(File) ->
     end.
 
 load_(Fd) ->
-    G0 = io:read('', Fd),
-    G1 = G0#{ v => #{}, e => #{}},
-    load_elems_(Fd, G1, #{}).
+    case io:read(Fd,'') of
+	{ok,G0} ->
+	    G1 = G0#{ v => #{}, e => #{}},
+	    load_elems_(Fd, G1, #{});
+	Error ->
+	    Error
+    end.
 
 load_elems_(Fd, G = #{ v := Vs0 }, IDMap) ->
-    case io:read('', Fd) of
-	eof -> G;
-	Vx = #{ ?ID := ID, type := vertex } ->
+    case io:read(Fd, '') of
+	eof -> 
+	    {ok,G};
+	{ok,Vx = #{ ?ID := ID, type := vertex }} ->
 	    {ID1,IDMap1} =
 		case is_unique_vertex(ID) of
 		    true ->
@@ -143,7 +151,7 @@ load_elems_(Fd, G = #{ v := Vs0 }, IDMap) ->
 	    G1 = G#{ v => Vs0# { ID1 => Vx1 }},
 	    load_elems_(Fd, G1, IDMap1);
 
-	Ex = #{ ?ID := ID, type := edge, ?PT1 := A, ?PT2 := B } ->
+	{ok,Ex = #{ ?ID := ID, type := edge, ?PT1 := A, ?PT2 := B }} ->
 	    {ID1,IDMap1} =
 		case is_unique_edge(ID) of
 		    true ->
@@ -156,7 +164,9 @@ load_elems_(Fd, G = #{ v := Vs0 }, IDMap) ->
 	    Bv = maps:get(B, IDMap1),
 	    Props = filter_props(maps:to_list(Ex)),
 	    G1 = insert_edge_(Av,Bv,ID1,Props,G),
-	    load_elems_(Fd, G1, IDMap1)
+	    load_elems_(Fd, G1, IDMap1);
+	Error ->
+	    Error
     end.
 
 is_graph(#{ ?TYPE := graph }) -> true;
@@ -323,9 +333,9 @@ is_edge(A,B,G) ->
     end.
 
 edge(A,B, #{ ?TYPE := graph, v := Vs, is_digraph:=Digraph}) ->
-    edge(sort(A,B,Digraph), Vs).
+    edge_(sort(A,B,Digraph), Vs).
 
-edge({A,B}, Vs) ->
+edge_({A,B}, Vs) ->
     case maps:find(A, Vs) of
 	error -> false;
 	{ok,Vx} ->
@@ -349,6 +359,12 @@ fold_edges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
 fold_xedges(Fun, Acc, #{ ?TYPE := graph, e := Es}) ->
     maps:fold(fun(_E,Ex,Ai) -> Fun(Ex,Ai) end, Acc, Es).
 
+edge_iterator(#{ ?TYPE := graph, e := Es}) ->
+    maps:iterator(Es).
+
+edge_next(Iter) ->
+    maps:next(Iter).
+
 get_edge_by_id(E, #{?TYPE:=graph,e:=Es}) ->
     Ex = maps:get(E, Es),
     filter_props(maps:to_list(Ex)).
@@ -360,6 +376,10 @@ get_edge_by_id(E, Key, #{?TYPE:=graph,e:=Es}) ->
 get_edge_by_id(E, Key, #{?TYPE:=graph,e:=Es}, Default) ->
     Ex = maps:get(E, Es),
     maps:get(Key,Ex,Default).
+
+get_edge(E, #{?TYPE:=graph,e:=Es}) ->
+    #{ ?PT1 := V, ?PT2 := W } = maps:get(E,Es),
+    {V, W}.
 
 %% get edge by vertices
 get_edge(A0,B0,#{?TYPE:=graph,e:=Es,v:=Vs,is_digraph:=Digraph}) ->
@@ -599,6 +619,13 @@ fold_vertices(Fun, Acc0, #{ ?TYPE := graph, v := Vs}) ->
 %% like fold_vertices but pass the vertex map instead
 fold_xvertices(Fun, Acc0, #{ ?TYPE := graph, v := Vs}) ->
     maps:fold(fun(_V,Vx,Acc1) -> Fun(Vx,Acc1) end, Acc0, Vs).
+
+vertex_iterator(#{ ?TYPE := graph, v := Vs}) ->
+    maps:iterator(Vs).
+
+vertex_next(Iter) ->
+    maps:next(Iter).
+
 
 is_internal_prop(?ID) -> true;
 is_internal_prop(?TYPE) -> true;
