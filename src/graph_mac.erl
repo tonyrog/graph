@@ -9,6 +9,8 @@
 
 -export([load/1]).
 -export([save/2]).
+-export([import/1]).
+
 -compile(export_all).
 
 -type int16() :: -16#8000 .. 16#7fff.
@@ -168,7 +170,7 @@ import([{node,Name,GD,VD,ND}|Es], G, Selected, Vmap) ->
 			  [{label,Name},
 			   {enum,TheEnum},
 			   {x,X},{y,Y},
-			   {color,graph_edit:color(Color)},
+			   {color,theColor},
 			   {width,16},
 			   {height,16},
 			   {shape, ellipse}], G),
