@@ -32,7 +32,7 @@
 -define(WHITE, grey5).
 -define(BLACK, grey10).
 
--include("graph_menu.hrl").
+-include_lib("epx/include/epx_menu.hrl").
 
 %% color profile with default values
 -record(profile,
@@ -169,7 +169,7 @@ init(Options) ->
     Pixels = epx:pixmap_create(Width, Height, argb),
     epx:pixmap_attach(Pixels, Backend),
 
-    Menu = graph_menu:create(MenuProfile, menu(global)),
+    Menu = epx_menu:create(MenuProfile, menu(global)),
 
     State = #state{ backend = Backend,
 		    window = Window,
@@ -306,13 +306,13 @@ handle_epx_event(Event, State) ->
 	    XY = {X,Y} = izm(Xm,Ym,State#state.zoom),
 	    if 
 		State#state.operation =:= menu ->
-		    case graph_menu:find_row(State#state.menu, 
-					     State#state.pt1,
-					     {Xm,Ym}) of
+		    case epx_menu:find_row(State#state.menu, 
+					   State#state.pt1,
+					   {Xm,Ym}) of
 			{-1, _Menu} ->
 			    {noreply, State};
 			{_Row, Menu} ->
-			    case graph_menu:command(Menu) of
+			    case epx_menu:command(Menu) of
 				none ->
 				    {noreply, State#state { menu=Menu }};
 				{Cmd,Mod} ->
@@ -466,7 +466,7 @@ handle_epx_event(Event, State) ->
 	    %% Menu = menu(global),
 	    %% MenuGeometry = graph_menu:calc_menu_size(Menu,MI),
 	    epx:window_enable_events(State#state.window,[motion]),
-	    Menu = graph_menu:set_row(State#state.menu, -1),
+	    Menu = epx_menu:set_row(State#state.menu, -1),
 	    State1 = State#state { pt1 = {X,Y}, operation = menu,
 				   menu = Menu },
 	    invalidate(State1),
@@ -518,9 +518,9 @@ handle_epx_event(Event, State) ->
 	    flush_motions(State#state.window),
 	    if State#state.operation =:= menu ->
 		    %% check menu row
-		    {Row,Menu} = graph_menu:find_row(State#state.menu,
-						     State#state.pt1,
-						     {Xm,Ym}),
+		    {Row,Menu} = epx_menu:find_row(State#state.menu,
+						   State#state.pt1,
+						   {Xm,Ym}),
 		    if Row =:= -1 ->
 			    {noreply, State#state { menu=Menu }};
 		       true ->
@@ -744,7 +744,7 @@ shape(_) -> ellipse.
 	proplists:get_value(Key, Env, Default#profile.Key)).
 
 -define(ldc(Scheme, Key, Env, Default),
-	graph_profile:color_number(Scheme, ?ld(Key,Env,Default))).
+	epx_profile:color_number(Scheme, ?ld(Key,Env,Default))).
 
 %% load #profile from environment
 load_profile(E) ->
@@ -1080,7 +1080,7 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
     Zoom = State#state.zoom,
     Grid = State#state.grid,
     Scheme = Profile#profile.scheme,
-    ScreenColor = graph_profile:color(Scheme, Profile#profile.screen_color),
+    ScreenColor = epx_profile:color(Scheme, Profile#profile.screen_color),
     epx:pixmap_fill(State#state.pixels,ScreenColor),
     epx_gc:set_fill_style(solid),
     Offset = if State#state.operation =:= move ->
@@ -1093,7 +1093,7 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
     %% | 1%       Pt1                  Pt2        Delta 
     %% | 10000% | x:-1000.0 y:1000.2 | x:0  y:0 | dx:0  dy:0 | x:16 y:16 |
     %% 
-    EdgeColor = graph_profile:color(Scheme, Profile#profile.edge_color),
+    EdgeColor = epx_profile:color(Scheme, Profile#profile.edge_color),
     graph:fold_edges(
       fun(V,W,E,Acc) ->
 	      Vxy0 = get_vertex_coord(V, G),
@@ -1111,18 +1111,18 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 	      Wxy2 = snap(Wxy1, Grid),
 	      Wxy3 = scale(Wxy2, Zoom),
 	      Color = graph:get_edge_by_id(E, color, G, EdgeColor),
-	      RGB = graph_profile:color(Scheme, Color),
+	      RGB = epx_profile:color(Scheme, Color),
 	      epx_gc:set_foreground_color(RGB),
 	      epx_gc:set_line_width(zm(1,Zoom)),
 	      epx:draw_line(State#state.pixels,Vxy3, Wxy3),
 	      Acc
       end, [], G),
 
-    VertexColor = graph_profile:color(Scheme, Profile#profile.vertex_color),
-    VertexSelectBorderColor = graph_profile:color(Scheme,Profile#profile.vertex_select_border_color),
-    VertexBorderColor = graph_profile:color(Scheme,Profile#profile.vertex_border_color),
-    VertexHighLightColor = graph_profile:color(Scheme, Profile#profile.vertex_highlight_color),
-    VertexHighLightBorderColor = graph_profile:color(Scheme, Profile#profile.vertex_highlight_border_color),
+    VertexColor = epx_profile:color(Scheme, Profile#profile.vertex_color),
+    VertexSelectBorderColor = epx_profile:color(Scheme,Profile#profile.vertex_select_border_color),
+    VertexBorderColor = epx_profile:color(Scheme,Profile#profile.vertex_border_color),
+    VertexHighLightColor = epx_profile:color(Scheme, Profile#profile.vertex_highlight_color),
+    VertexHighLightBorderColor = epx_profile:color(Scheme, Profile#profile.vertex_highlight_border_color),
     graph:fold_vertices(
       fun(V, Acc) ->
 	      Rect0 = vertex_rect(V, G),
@@ -1153,13 +1153,13 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 			  false ->
 			      Color = graph:get_vertex_by_id(V,color,G, 
 							     VertexColor),
-			      RGB = graph_profile:color(Scheme, Color),
+			      RGB = epx_profile:color(Scheme, Color),
 			      epx_gc:set_fill_color(RGB)
 		      end;
 		 true ->
 		      Color = graph:get_vertex_by_id(V,color,G, 
 						     VertexColor),
-		      RGB = graph_profile:color(Scheme, Color),
+		      RGB = epx_profile:color(Scheme, Color),
 		      epx_gc:set_fill_color(RGB)
 	      end,
 	      case vertex_shape(V, G) of
@@ -1182,11 +1182,11 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 	      Acc
       end, [], G),
 
-    SelectionColor = graph_profile:color(Scheme, Profile#profile.selection_color),
-    EdgeHighLightColor = graph_profile:color(Scheme, Profile#profile.edge_highlight_color),
+    SelectionColor = epx_profile:color(Scheme, Profile#profile.selection_color),
+    EdgeHighLightColor = epx_profile:color(Scheme, Profile#profile.edge_highlight_color),
     if State#state.pt1 =/= undefined, State#state.operation =:= menu ->
-	    graph_menu:draw(State#state.menu, State#state.pixels, 
-			    State#state.pt1);
+	    epx_menu:draw(State#state.menu, State#state.pixels, 
+			  State#state.pt1);
        State#state.pt1 =:= undefined; State#state.pt2 =:= undefined ->
 	    ok;
        true ->
@@ -1194,7 +1194,7 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 		select ->
 		    Bw4 = zm(Profile#profile.selection_border_width,Zoom),
 		    Bc = Profile#profile.selection_border_color,
-		    epx_gc:set_border_color(graph_profile:color(Scheme,Bc)),
+		    epx_gc:set_border_color(epx_profile:color(Scheme,Bc)),
 		    epx_gc:set_border_width(Bw4),
 		    Color = alpha_color(Profile#profile.selection_alpha,
 					SelectionColor),
