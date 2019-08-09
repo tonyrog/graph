@@ -33,6 +33,7 @@
 -define(BLACK, grey10).
 
 -include_lib("epx/include/epx_menu.hrl").
+-include_lib("epx/include/epx_window_content.hrl").
 
 %% color profile with default values
 -record(profile,
@@ -67,7 +68,19 @@
 	 menu_font_size                = 14,
 	 menu_font_color               = ?WHITE,
 	 menu_background_color         = ?BLACK,
-	 menu_border_color             = green
+	 menu_border_color             = green,
+
+	 window_font_name              = "Arial",
+	 window_font_size              = 12,
+	 window_font_color             = ?BLACK,
+	 scroll_bar_color              = grey6,
+	 scroll_hndl_color             = gray8,
+	 scroll_horizontal             = right,
+	 scroll_vertical               = bottom,
+	 top_bar_color                 = red,
+	 left_bar_color                = green,
+	 right_bar_color               = blue,
+	 bottom_bar_color              = white
 	}).
 
 	 
@@ -526,9 +539,7 @@ handle_epx_event(Event, State) ->
 		       true ->
 			    State1 = State#state { menu = Menu },
 			    invalidate(State1),
-			    {noreply, State1};
-		       true ->
-			    {noreply, State}
+			    {noreply, State1}
 		    end;
 	       true ->
 		    {noreply, State}
@@ -798,6 +809,22 @@ create_menu_profile(Profile) ->
        font_color       = Profile#profile.menu_font_color,
        background_color = Profile#profile.menu_background_color,
        border_color     = Profile#profile.menu_border_color
+      }.
+
+create_window_profile(Profile) ->
+    #window_profile {
+       scheme           = Profile#profile.scheme,
+       font_name        = Profile#profile.window_font_name,
+       font_size        = Profile#profile.window_font_size,
+       font_color       = Profile#profile.window_font_color,
+       scroll_bar_color = Profile#profile.scroll_bar_color,
+       scroll_hndl_color = Profile#profile.scroll_hndl_color,
+       scroll_horizontal = Profile#profile.scroll_horizontal,
+       scroll_vertical   = Profile#profile.scroll_vertical,
+       top_bar_color     = Profile#profile.top_bar_color,
+       left_bar_color    = Profile#profile.left_bar_color,
+       right_bar_color   = Profile#profile.right_bar_color,
+       bottom_bar_color  = Profile#profile.bottom_bar_color
       }.
 
 resize_pixmap(undefined, W, H) ->
