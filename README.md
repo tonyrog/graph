@@ -22,3 +22,8 @@ minor hints
 * select and backspace to delete vertices
 * press arrow keys to move selected subgraph
 
+# generate AppImage
+
+    erl -config graph.config -s graph_edit -s servator make_appimage graph
+	[close window]
+	

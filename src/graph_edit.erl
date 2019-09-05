@@ -593,6 +593,7 @@ handle_epx_event(Event, State) ->
 	    {noreply, State};
 
 	close -> 
+	    erlang:halt(0),
 	    {stop,normal,State};
 
 	destroy ->

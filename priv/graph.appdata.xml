@@ -1,0 +1,20 @@
+<component type="desktop-application">
+	<id>graph</id>
+	<metadata_license>MIT</metadata_license>
+	<project_license>MIT</project_license>
+	<name>Graph</name>
+	<summary>Graph tool</summary>
+	<description>
+		<p>Graph tool is used to create graphs and analyse graphs using various algorithms like colouring, cover etc.</p>
+	</description>
+	<launchable type="desktop-id">graph.desktop</launchable>
+	<url type="homepage">http://rogvall.se/apps/graph</url>
+	<screenshots>
+		<screenshot type="default">
+			<image>http://rogvall.se/apps/graph/graph.png</image>
+		</screenshot>
+	</screenshots>
+	<provides>
+		<id>graph.desktop</id>
+	</provides>
+</component>

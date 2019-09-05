@@ -1,0 +1,12 @@
+#!/usr/bin/env xdg-open
+
+[Desktop Entry]
+Version=1.0
+Type=Application
+Categories=Utility;
+Terminal=false
+Exec=AppRun
+Comment[sv_SE]=Grafverktyg
+Name=Graph
+Comment=Graph tool
+Icon=graph
