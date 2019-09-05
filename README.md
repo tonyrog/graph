@@ -26,4 +26,4 @@ minor hints
 
     erl -config graph.config -s graph_edit -s servator make_appimage graph
 	[close window]
-	
+    appimagetool -n graph.AppDir
