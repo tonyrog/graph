@@ -164,13 +164,13 @@ import({#graph_data{nVertices=_Nv,nEdges=_Ne},Elements,_Tail}) ->
 import([{node,Name,GD,VD,ND}|Es], G, Selected, Vmap) ->
     V = graph:unique_vertex(),
     #vertex_data { theEnum = TheEnum } = VD,
-    #node_data{thePosition=P, theColor=Color} = ND,
+    #node_data{thePosition=P, theColor=TheColor} = ND,
     #point{ v=Y, h=X} = P,
     G1 = graph:put_vertex(V,
 			  [{label,Name},
 			   {enum,TheEnum},
 			   {x,X},{y,Y},
-			   {color,theColor},
+			   {color,TheColor},
 			   {width,16},
 			   {height,16},
 			   {shape, ellipse}], G),
@@ -197,9 +197,3 @@ import([{edge,Name,_GD,ED,LD}|Es], G, Selected, Vmap) ->
     import(Es, G1, Selected, Vmap);
 import([], G, Selected, _VMap) ->
     {G, Selected}.
-
-
-
-    
-    
-    

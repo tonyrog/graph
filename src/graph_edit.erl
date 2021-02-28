@@ -8,26 +8,33 @@
 %%%-------------------------------------------------------------------
 -module(graph_edit).
 
--behaviour(gen_server).
+-behaviour(epxw).
 
 %% API
 -export([start/0]).
 -export([graph/1]).
--export([load_mac/1]).
--export([use_graph/1]).
+-export([load/1, load_mac/1, load_matrix/1]).
+-export([save/1]).
+-export([set_graph/1]).
 -export([shape/1]).
 
-%% gen_server callbacks
+%% epxw/gen_server callbacks
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
 	 terminate/2, code_change/3, format_status/2]).
+%% epxw callbacks
+-export([button_press/2, 
+	 button_release/2, 
+	 command/3,
+	 select/2,
+	 draw/3,
+	 motion/2,
+	 menu/2
+	]).
 
 -define(SERVER, ?MODULE).
 
 -define(WIDTH,  800).
 -define(HEIGHT, 480).
-
--define(USE_OFF_SCREEN, true).
--define(USE_EXPOSURE, false).
 
 -define(WHITE, grey5).
 -define(BLACK, grey10).
@@ -83,66 +90,123 @@
 	 bottom_bar_color              = white
 	}).
 
-	 
 -record(state,
 	{
-	 backend,
-	 window,
-	 pixels,
-	 width,
-	 height,
 	 profile,         %% color profile
 	 pt,              %% last button press position
 	 pt1,
 	 pt2,
-	 operation = none :: none | menu | select | move | vertex | edge,
+	 operation = none :: none | select | move | vertex | edge,
 	 selected = [],   %% list of selected vertices (and edges?)
-	 keymod = #keymod{}, %% modifiers
+	 selected_once = [],  %% temporary selected (one command)
+	 selection,       %% selected area
 	 graph,           %% the graph
 	 grid,            %% undefined | {Xstep,Ystep}
-	 zoom = 1,        %% zoom factor
 	 clip,            %% the cut/copy graph
-	 menu,            %% global menu state
+	 graph_menu,
+	 vertex_ctrl_menu,
+	 vertex_alt_menu,
+	 edge_ctrl_menu,
 	 label_font
 	}).
 
--define(SHIFT(State), (State#state.keymod)#keymod.shift).
--define(CTRL(State), (State#state.keymod)#keymod.ctrl).
--define(ALT(State), (State#state.keymod)#keymod.alt).
+menu(graph) ->
+    [
+     {"Cut", "Ctrl+X"},
+     {"Copy", "Ctrl+C"},
+     {"Paste", "Ctrl+V"},
+     {"Delete", "Del"},
+     {"---", ""},
+     {"Save",  "Ctrl+S"},
+     {"---", ""},
+     {"Complete", "Shift+C"},
+     {"Complement", "Shift+I"},
+     {"Snap to grid", "Shift+G"},
+     {"Zoom in", "+"},
+     {"Zoom out", "-"},
+     {"Colour", "R"},
+     {"Clique", "Q"},
+     {"Vertex Cover", "O"}
+    ];
+menu(vertex_ctrl) ->
+    [
+     {"Red",    "Ctrl+1"},
+     {"Orange", "Ctrl+2"},
+     {"Brown",  "Ctrl+3"},
+     {"Yellow", "Ctrl+4"},
+     {"Green",  "Ctrl+5"},
+     {"Lime",   "Ctrl+6"},
+     {"Turquoise", "Ctrl+7"},
+     {"Cyan",   "Ctrl+8"}
+    ];
+menu(vertex_alt) ->
+    [
+     {"Circle",    "Alt+0"},
+     {"Rectangle", "Alt+1"},
+     {"RoundRect", "Alt+2"},
+     {"Triangle",  "Alt+3"}
+    ];
+menu(edge_ctrl) ->
+    [
+     {"Red",    "Ctrl+1"},
+     {"Orange", "Ctrl+2"},
+     {"Brown",  "Ctrl+3"},
+     {"Yellow", "Ctrl+4"},
+     {"Green",  "Ctrl+5"},
+     {"Lime",   "Ctrl+6"},
+     {"Turquoise", "Ctrl+7"},
+     {"Cyan",   "Ctrl+8"}
+    ].
 
 %%%===================================================================
 %%% API
 %%%===================================================================
 
 graph(G) ->
-    start([true, {graph,G}]).
+    start([{graph,G}]).
 
 start() ->
-    start([false]).
+    start([]).
 
-start([TTYLogger|Opts0]) ->
-    %% (catch error_logger:tty(TTYLogger)),
-    application:start(lager),
-    application:load(epx),
-    application:set_env(epx, use_off_screen, ?USE_OFF_SCREEN),
-    application:set_env(epx, use_exposure, ?USE_EXPOSURE),
-    %% epx:debug(debug),
-    application:load(graph),
-    Width  = application:get_env(graph, screen_width, ?WIDTH),
-    Height = application:get_env(graph, screen_height, ?HEIGHT),
+start(_Opts0) ->
     application:ensure_all_started(epx),
-    Opts = [{screen_width,Width},{screen_height,Height}|Opts0],
-    gen_server:start({local, ?SERVER}, ?MODULE, Opts, []).
+    application:load(graph),
+    epxw:start(?MODULE,
+	       [hello,world],
+	       [{title, "MacGraphII"},
+		{scroll_horizontal, bottom},  %% none|top|bottom
+		{scroll_vertical,   right},   %% none|left|right
+		{scroll_bar_color,  cyan},
+		{scroll_hndl_color, blue},
+		{scroll_bar_size,   14},
+		{scroll_hndl_size,  10},
+		{left_bar, 32},
+		{top_bar, 20},
+		{right_bar, 8},
+		{width, ?WIDTH},
+		{height, ?HEIGHT},
+		{view_width,?WIDTH},
+		{view_height,?HEIGHT}]).
+
+load(File) ->
+    gen_server:call(?SERVER, {load, File}).
+
+save(File) ->
+    gen_server:call(?SERVER, {save, File}).
+
+load_matrix(File) ->
+    gen_server:call(?SERVER, {load_matrix, File}).
 
 load_mac(File) ->
     gen_server:call(?SERVER, {load_mac, File}).
 
-use_graph(G) ->
-    gen_server:call(?SERVER, {use_graph, G}).
+set_graph(G) ->
+    gen_server:call(?SERVER, {set_graph, G}).
 
 %%%===================================================================
 %%% gen_server callbacks
 %%%===================================================================
+
 
 %%--------------------------------------------------------------------
 %% @private
@@ -150,50 +214,31 @@ use_graph(G) ->
 %% Initializes the server
 %% @end
 %%--------------------------------------------------------------------
--spec init(Args :: term()) -> {ok, State :: term()} |
-			      {ok, State :: term(), Timeout :: timeout()} |
-			      {ok, State :: term(), hibernate} |
-			      {stop, Reason :: term()} |
-			      ignore.
+-spec init(Args :: term()) -> 
+	  {ok, State :: term()} |
+	  {ok, State :: term(), Timeout :: timeout()} |
+	  {ok, State :: term(), hibernate} |
+	  {stop, Reason :: term()} |
+	  ignore.
 init(Options) ->
-    process_flag(trap_exit, true),
     %% options list override env
     Env = Options ++ application:get_all_env(graph),
-    Width  = proplists:get_value(screen_width, Env, ?WIDTH),
-    Height = proplists:get_value(screen_height, Env, ?HEIGHT),
     G = proplists:get_value(graph, Env, graph:new(false)),
     Profile = load_profile(Env),
     MenuProfile = create_menu_profile(Profile),
-    Backend = epx_backend:default(),
-    Events = 
-	[key_press,key_release,
-	 %% wheel, left, right, %% motion-left-button
-	 configure,    %% resize,
-	 button_press,button_release] ++
-	case ?USE_EXPOSURE of
-	    true -> [expose];
-	    _ -> []
-	end,
-    Window = epx:window_create(40, 40, Width, Height, Events),
+    %% context menu? vertex menu? and graph menu...
+    GraphMenu = epx_menu:create(MenuProfile, menu(graph)),
+    VertexCtrlMenu = epx_menu:create(MenuProfile, menu(vertex_ctrl)),
+    VertexAltMenu = epx_menu:create(MenuProfile, menu(vertex_alt)),
+    EdgeCtrlMenu = epx_menu:create(MenuProfile, menu(edge_ctrl)),
 
-    epx:window_attach(Window, Backend),
-    epx:window_adjust(Window, [{name, "MacGraph2"}]),
-
-    Pixels = epx:pixmap_create(Width, Height, argb),
-    epx:pixmap_attach(Pixels, Backend),
-
-    Menu = epx_menu:create(MenuProfile, menu(global)),
-
-    State = #state{ backend = Backend,
-		    window = Window,
-		    pixels = Pixels,
-		    profile = Profile,
-		    width  = Width,
-		    height = Height,
-		    menu   = Menu,
+    State = #state{ profile = Profile,
+		    graph_menu  = GraphMenu,
+		    vertex_ctrl_menu = VertexCtrlMenu,
+		    vertex_alt_menu  = VertexAltMenu,
+		    edge_ctrl_menu   = EdgeCtrlMenu,
 		    graph = G
 		  },
-    invalidate(State),
     {ok, State}.
 
 %%--------------------------------------------------------------------
@@ -203,31 +248,60 @@ init(Options) ->
 %% @end
 %%--------------------------------------------------------------------
 -spec handle_call(Request :: term(), From :: {pid(), term()}, State :: term()) ->
-			 {reply, Reply :: term(), NewState :: term()} |
-			 {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
-			 {reply, Reply :: term(), NewState :: term(), hibernate} |
-			 {noreply, NewState :: term()} |
-			 {noreply, NewState :: term(), Timeout :: timeout()} |
-			 {noreply, NewState :: term(), hibernate} |
-			 {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
-			 {stop, Reason :: term(), NewState :: term()}.
+	  {reply, Reply :: term(), NewState :: term()} |
+	  {reply, Reply :: term(), NewState :: term(), Timeout :: timeout()} |
+	  {reply, Reply :: term(), NewState :: term(), hibernate} |
+	  {noreply, NewState :: term()} |
+	  {noreply, NewState :: term(), Timeout :: timeout()} |
+	  {noreply, NewState :: term(), hibernate} |
+	  {stop, Reason :: term(), Reply :: term(), NewState :: term()} |
+	  {stop, Reason :: term(), NewState :: term()}.
+
+handle_call({load,File}, _From, State) ->
+    case graph:load(File) of
+	Error = {error,_Reason} ->
+	    {reply, Error, State};
+	G ->
+	    epxw:invalidate(),
+	    {reply, ok, State#state { graph = G, 
+				      clip = undefined,
+				      selected = [] }}
+    end;
+handle_call({save,File}, _From, State) ->
+    case graph:save(File) of
+	Error = {error,_Reason} ->
+	    {reply, Error, State};
+	ok ->
+	    %% Fixme: update save status
+	    {reply, ok, State}
+    end;
+handle_call({load_matrix,File}, _From, State) ->
+    case graph_file:load(File) of
+	Error = {error,_Reason} ->
+	    {reply, Error, State};
+	{ok,G} ->
+	    epxw:invalidate(),
+	    {reply, ok, State#state { graph = G, 
+				      clip = undefined,
+				      selected = [] }}
+    end;
 handle_call({load_mac,File}, _From, State) ->
     case graph_mac:load(File) of
 	Error = {error,_Reason} ->
 	    {reply, Error, State};
 	{ok,GraphData} ->
 	    {G,Selected} = macgraph:import(GraphData),
-	    invalidate(State),
+	    epxw:invalidate(),
 	    {reply, ok, State#state { graph = G, 
 				      clip = undefined,
 				      selected = Selected}};
 	{_, _} ->
 	    {reply, {error, decode_problem}, State}
     end;
-handle_call({use_graph,G}, _From, State) ->
+handle_call({set_graph,G}, _From, State) ->
     case graph:is_graph(G) of
 	true ->
-	    invalidate(State),
+	    epxw:invalidate(),
 	    {reply, ok, State#state { graph = G,
 				      clip = undefined,
 				      selected = []}};
@@ -249,6 +323,7 @@ handle_call(_Request, _From, State) ->
 			 {noreply, NewState :: term(), hibernate} |
 			 {stop, Reason :: term(), NewState :: term()}.
 handle_cast(_Request, State) ->
+    io:format("Got cast ~p\n", [_Request]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -262,11 +337,8 @@ handle_cast(_Request, State) ->
 			 {noreply, NewState :: term(), Timeout :: timeout()} |
 			 {noreply, NewState :: term(), hibernate} |
 			 {stop, Reason :: normal | term(), NewState :: term()}.
-handle_info({epx_event,W,Event}, State) when State#state.window =:= W ->
-    %% io:format("Epx event ~p\n", [Event]),
-    handle_epx_event(Event, State);
-handle_info(Event, State)  ->
-    io:format("Got event ~p\n", [Event]),
+handle_info(_Event, State)  ->
+    io:format("Got event ~p\n", [_Event]),
     {noreply, State}.
 
 %%--------------------------------------------------------------------
@@ -313,311 +385,188 @@ format_status(_Opt, Status) ->
 %%% Internal functions
 %%%===================================================================
 
-handle_epx_event(Event, State) ->
-    case Event of
-	{button_press, [left], _Where={Xm,Ym,_Zm}} ->
-	    XY = {X,Y} = izm(Xm,Ym,State#state.zoom),
-	    if 
-		State#state.operation =:= menu ->
-		    case epx_menu:find_row(State#state.menu, 
-					   State#state.pt1,
-					   {Xm,Ym}) of
-			{-1, _Menu} ->
-			    {noreply, State};
-			{_Row, Menu} ->
-			    case epx_menu:command(Menu) of
-				none ->
-				    {noreply, State#state { menu=Menu }};
-				{Cmd,Mod} ->
-				    State1 = State#state { menu=Menu },
-				    State2 = command(Cmd,State1#state.selected,
-						     Mod,State),
-				    invalidate(State2),
-				    {noreply, State2}
-			    end
-		    end;
-	       ?CTRL(State) ->  %% Add vertex
-		    Profile = State#state.profile, 
-		    Color = Profile#profile.vertex_color,
-		    Width = Profile#profile.vertex_width,
-		    Height = Profile#profile.vertex_height,
-		    Shape = Profile#profile.vertex_shape,
-		    V = graph:unique_vertex(),
-		    G1 = graph:put_vertex(V,
-					  [{x,X},{y,Y},
-					   {color,Color},
-					   {height,Height},
-					   {width,Width},
-					   {shape,Shape}],
-					  State#state.graph),
-		    invalidate(State),
-		    {noreply, State#state { operation = vertex,
-					    pt1 = XY,
-					    pt2 = XY,
-					    graph = G1 }};
-
-		?ALT(State) ->  %% Add edge
-		    case select(XY,State#state.graph,[]) of
-			[] ->
-			    invalidate(State),
-			    {noreply, State#state { selected = [],
-						    operation = none }};
-			[V|_] ->
-			    Window = State#state.window,
-			    epx:window_enable_events(Window,[motion]),
-			    invalidate(State),
-			    {noreply, State#state { operation = edge,
-						    selected = [V],
-						    pt1 = XY, pt2 = XY
-						  }}
-		    end;
-
-	       true ->
-		    Window = State#state.window,
-		    epx:window_enable_events(Window,[motion]),
-		    invalidate(State),
-		    Sel0 = State#state.selected,
-		    case select(XY,State#state.graph,[]) of
-			[] ->
-			    Sel = if ?SHIFT(State) -> Sel0; true -> [] end,
-			    {noreply,
-			     State#state { operation = select,
-					   selected = Sel,
-					   pt1 = XY, pt2 = XY }};
-			[V|_] ->
-			    case lists:member(V, Sel0) of
-				true ->
-				    Sel = if ?SHIFT(State) ->
-						  Sel0 -- [V];
-					     true ->
-						  Sel0
-					  end,
-				    {noreply,
-				     State#state { operation = move,
-						   selected = Sel,
-						   pt1 = XY, pt2 = XY }};
-				false ->
-				    if ?SHIFT(State) ->
-					    {noreply,
-					     State#state { operation = select,
-							   selected = [V|Sel0],
-							   pt1 = XY, pt2 = XY}};
-				       true ->
-					    {noreply,
-					     State#state { operation = move,
-							   selected = [V],
-							   pt1 = XY, pt2 = XY}}
-				    end
-			    end
-		    end
-	    end;
-
-	{button_release, [left], _Where={Xm,Ym,_Zm}} ->
-	    XY = izm(Xm,Ym,State#state.zoom),
-	    Window = State#state.window,
-	    epx:window_disable_events(Window,[motion]),
-	    State1 = State#state { pt = XY },
-	    case State1#state.pt1 of
-		undefined ->
-		    {noreply,State1};
-	       Pt1 ->
-		    Pt2 = XY,
-		    Sel0 = State1#state.selected,
-		    case State1#state.operation of
-			move ->
-			    Offset = coords_sub(Pt2, Pt1),
-			    G = move_vertices(Sel0,Offset,State1#state.graph),
-			    invalidate(State1),
-			    {noreply, State1#state { pt1 = undefined, 
-						     pt2 = undefined,
-						     operation = none,
-						     graph = G }};
-			select ->
-			    Rect = coords_to_rect(Pt1,Pt2),
-			    Sel1 = if ?SHIFT(State1) -> Sel0; true -> [] end,
-			    Sel = select_area(Rect,State1#state.graph,Sel1),
-			    invalidate(State1),
-			    {noreply, State1#state { pt1 = undefined,
-						     pt2 = undefined,
-						     operation = none,
-						     selected = Sel }};
-			edge ->
-			    invalidate(State1),
-			    case select(XY,State1#state.graph,[]) of
-				[] ->
-				    {noreply, State1#state { pt1 = undefined,
-							     pt2 = undefined,
-							     operation = none }};
-				[W|_] when W =:= hd(State1#state.selected) ->
-				    {noreply, State1#state { pt1 = undefined,
-							     pt2 = undefined,
-							     operation = none }};
-				[W|_] ->
-				    [V] = State1#state.selected,
-				    Profile = State1#state.profile,
-				    EdgeColor = Profile#profile.edge_color,
-				    G = graph:put_edge(V, W, 
-						       [{color,EdgeColor}],
-						       State1#state.graph),
-				    {noreply, State1#state { pt1 = undefined,
-							     pt2 = undefined,
-							     selected = [W],
-							     graph = G,
-							     operation = none }}
-			    end;
-			_ ->
-			    invalidate(State1),
-			    {noreply, State1#state { pt1 = undefined,
-						     pt2 = undefined,
-						     operation = none }}
-		    end
-	    end;
-
-	{button_press, [right], _Where={X,Y,_Zm}} ->
-	    %% MI = State#state.menu_info,
-	    %% epx_gc:set_font(MI#menu_info.font),
-	    %% Menu = menu(global),
-	    %% MenuGeometry = graph_menu:calc_menu_size(Menu,MI),
-	    epx:window_enable_events(State#state.window,[motion]),
-	    Menu = epx_menu:set_row(State#state.menu, -1),
-	    State1 = State#state { pt1 = {X,Y}, operation = menu,
-				   menu = Menu },
-	    invalidate(State1),
-	    {noreply, State1};
-			  
-	{button_press,[wheel_down],{Xm,Ym,_Zm}} ->
-	    %% scale + selected graph
-	    XY = izm(Xm,Ym,State#state.zoom),
-	    flush_wheel(State#state.window),
-	    Selected = State#state.selected,
-	    Center = if ?SHIFT(State) ->
-			     graph_center(Selected,State#state.graph);
-			true ->
-			     XY
-		     end,
-	    G = scale_vertices(Selected, 1.2, Center, State#state.graph),
-	    State1 = State#state { graph = G },
-	    invalidate(State1),
-	    {noreply, State1};
-
-	{button_press,[wheel_up],{Xm,Ym,_Zm}} ->
-	    %% scale - selected graph
-	    XY = izm(Xm,Ym,State#state.zoom),
-	    flush_wheel(State#state.window),
-	    Selected = State#state.selected,
-	    Center = if ?SHIFT(State) ->
-			     graph_center(Selected,State#state.graph);
-			true ->
-			     XY
-		     end,
-	    G = scale_vertices(Selected, 0.8, Center, State#state.graph),
-	    State1 = State#state { graph = G },
-	    invalidate(State1),
-	    {noreply, State1};
-
-	{button_press,[wheel_left],{_Xm,_Ym,_Zm}} ->
-	    %% resize +
-	    %% XY = izm(Xm,Ym,State#state.zoom),
-	    flush_wheel(State#state.window),
-	    {noreply, State};
+button_press({_, [left], Pos}, State) ->
+    KM = epxw:keymod(),
+    if
+	KM#keymod.ctrl ->  %% Add vertex
+	    Profile = State#state.profile, 
+	    Color = Profile#profile.vertex_color,
+	    Width = Profile#profile.vertex_width,
+	    Height = Profile#profile.vertex_height,
+	    Shape = Profile#profile.vertex_shape,
+	    V = graph:unique_vertex(),
+	    {X,Y} = Pos,
+	    G1 = graph:put_vertex(V,
+				  [{x,X},{y,Y},
+				   {color,Color},
+				   {height,Height},
+				   {width,Width},
+				   {shape,Shape}],
+				  State#state.graph),
+	    epxw:invalidate(),
+	    State#state { operation = vertex,
+			  pt1 = Pos, pt2 = Pos, graph = G1 };
 	
-	{button_press,[wheel_right],{_Xm,_Ym,_Zm}} ->
-	    %% resize -
-	    %% XY = izm(Xm,Ym,State#state.zoom),
-	    flush_wheel(State#state.window),
-	    {noreply, State};
-
-	{motion, [], {Xm,Ym,_Zm}} ->
-	    flush_motions(State#state.window),
-	    if State#state.operation =:= menu ->
-		    %% check menu row
-		    {Row,Menu} = epx_menu:find_row(State#state.menu,
-						   State#state.pt1,
-						   {Xm,Ym}),
-		    if Row =:= -1 ->
-			    {noreply, State#state { menu=Menu }};
+	KM#keymod.alt ->
+	    %% Add edge: Multi edge all selected to ONE ?
+	    case select_pos(Pos,State#state.graph,[]) of
+		[] ->
+		    epxw:invalidate(),
+		    State#state { selected = [], operation = none };
+		[V|_] ->
+		    epxw:invalidate(),
+		    epxw:enable_motion(),
+		    State#state { operation = edge,
+				  selected = [V],
+				  pt1=Pos, pt2=Pos
+				}
+	    end;
+	true ->
+	    case select_pos(Pos,State#state.graph,[]) of
+		[] ->
+		    epxw:invalidate(),
+		    if KM#keymod.shift ->
+			    State#state { operation = select };
 		       true ->
-			    State1 = State#state { menu = Menu },
-			    invalidate(State1),
-			    {noreply, State1}
+			    State#state { selected = [], operation = select }
 		    end;
-	       true ->
-		    {noreply, State}
+		[V|_] ->
+		    epxw:invalidate(),
+		    epxw:enable_motion(),
+		    Selected = State#state.selected,
+		    case lists:member(V, Selected) of
+			true ->
+			    State#state { operation = move, pt1=Pos, pt2=Pos };
+			false ->
+			    Selected1 = 
+				if KM#keymod.shift -> [V|Selected];
+				   true -> [V]
+				end,
+			    State#state { operation = move, 
+					  selected = Selected1, 
+					  pt1=Pos, pt2=Pos }
+		    end
+	    end
+    end;
+button_press(_Event, State) ->
+    State.
+
+button_release(_Event={_,_,Pos}, State) ->
+    io:format("button release ~p\n", [_Event]),
+    case State#state.operation of
+	move ->
+	    io:format("move done\n"),
+	    Selected = State#state.selected,
+	    Offset = coords_sub(State#state.pt2, State#state.pt1),
+	    G = move_vertices(Selected,Offset,State#state.graph),
+	    epxw:invalidate(),
+	    epxw:disable_motion(),
+	    State#state { pt1 = undefined, pt2 = undefined, operation = none,
+			  selection = undefined, graph = G };
+	edge ->
+	    epxw:invalidate(),
+	    epxw:disable_motion(),
+	    case select_pos(Pos,State#state.graph,[]) of
+		[] ->
+		    State#state { pt1 = undefined,
+				  pt2 = undefined,
+				  selection = undefined,
+				  operation = none };
+		[W|_] when W =:= hd(State#state.selected) ->
+		    State#state { pt1 = undefined,
+				  pt2 = undefined,
+				  selection = undefined,
+				  operation = none };
+		[W|_] ->
+		    [V] = State#state.selected,
+		    Profile = State#state.profile,
+		    EdgeColor = Profile#profile.edge_color,
+		    G = graph:put_edge(V, W, 
+				       [{color,EdgeColor}],
+				       State#state.graph),
+		    State#state { pt1 = undefined,
+				  pt2 = undefined,
+				  selection = undefined,
+				  selected = [W],
+				  graph = G,
+				  operation = none }
 	    end;
-
-	{motion, [left], {Xm,Ym,_Zm}} ->
-	    flush_motions(State#state.window),
-	    XY = izm(Xm,Ym,State#state.zoom),
-	    case State#state.pt1 of
-		undefined ->
-		    {noreply, State};
-		_Pt1 ->
-		    invalidate(State),
-		    {noreply, State#state { pt2 = XY}}
-	    end;
-
-	{key_press, Sym, Mod, _code} ->
-	    %% io:format("Key press ~p mod=~p\n", [Sym,Mod]),
-	    M = set_mod(State#state.keymod, Mod),
-	    State1 = State#state { keymod=M },
-	    State2 = command(Sym, State1#state.selected, M, State1),
-	    invalidate(State2),
-	    {noreply, State2};
-
-	{key_release, _Sym, Mod, _code} ->
-	    %% %% io:format("Key release ~p mod=~p\n", [_Sym,Mod]),
-	    M = clr_mod(State#state.keymod, Mod),
-	    {noreply, State#state { keymod = M }};
-
-	{configure, {_X,_Y,W,H}} ->
-	    %% io:format("Configure x=~w,y=~w,w=~w,h=~w\n", [_X,_Y,W,H]),
-	    Pixels = resize_pixmap(State#state.pixels,W,H),
-	    State1 = State#state { pixels = Pixels, width=W, height=H },
-	    maybe_invalidate(not ?USE_EXPOSURE, State1),
-	    {noreply, State1};
-
-	{expose, {_X,_Y,_W,_H}} ->
-	    %% io:format("Expose x=~w,y=~w,w=~w,h=~w\n", [_X,_Y,_W,_H]),
-	    draw(State),
-	    {noreply, State};
-	
-	redraw ->
-	    flush_redraw(State),
-	    try draw(State) of
-		_ ->
-		    ok
-	    catch
-		error:Reason:Stack ->
-		    io:format("Error: ~p\n~p\n", [Reason,Stack])
-	    end,
-	    {noreply, State};
-
-	close -> 
-	    erlang:halt(0),
-	    {stop,normal,State};
-
-	destroy ->
-	    epx:window_detach(State#state.window),
-	    {stop,normal,State};
-
 	_ ->
-	    io:format("Epx event = ~p\n", [Event]),
-	    {noreply,State}
+	    State
     end.
 
-%% update mod keys
-set_mod(M, [shift|Mod]) ->  set_mod(M#keymod {shift = true}, Mod);
-set_mod(M, [ctrl|Mod]) ->   set_mod(M#keymod {ctrl = true}, Mod);
-set_mod(M, [alt|Mod]) ->    set_mod(M#keymod {alt = true}, Mod);
-set_mod(M, [_|Mod]) ->      set_mod(M, Mod);
-set_mod(M, []) -> M.
+motion({motion,_Button,Pos}, State) ->
+    io:format("motion ~p\n", [Pos]),
+    case State#state.operation of
+	move ->
+	    epxw:invalidate(),
+	    State#state { pt2 = Pos };
+	edge ->
+	    epxw:invalidate(),
+	    State#state { pt2 = Pos };
+	_ -> State
+    end.
 
-clr_mod(M, [shift|Mod]) ->  clr_mod(M#keymod {shift = false}, Mod);
-clr_mod(M, [ctrl|Mod]) ->   clr_mod(M#keymod {ctrl = false}, Mod);
-clr_mod(M, [alt|Mod]) ->    clr_mod(M#keymod {alt = false}, Mod);
-clr_mod(M, [_|Mod]) ->      clr_mod(M, Mod);
-clr_mod(M, []) -> M.
+menu({menu,Pos}, State) ->
+    case select_pos(Pos,State#state.graph,[]) of
+	[] ->
+	    {reply, State#state.graph_menu, State};
+	[V|_] ->
+	    KM = epxw:keymod(),
+	    case lists:member(V, State#state.selected) of
+		true when KM#keymod.ctrl ->
+		    {reply, State#state.vertex_ctrl_menu, State};
+		true when KM#keymod.alt ->
+		    {reply, State#state.vertex_alt_menu, State};
+		true ->
+		    {reply, State#state.vertex_ctrl_menu, State};
 
+		false when KM#keymod.alt ->
+		    {reply, State#state.vertex_alt_menu,
+		     State#state { selected_once = [V] }};
+		false when KM#keymod.ctrl ->
+		    {reply, State#state.vertex_ctrl_menu,
+		     State#state { selected_once = [V] }};
+		false ->
+		    io:format("once = ~p\n", [[V]]),
+		    {reply, State#state.vertex_ctrl_menu,
+		     State#state { selected_once = [V] }}
+	    end
+    end.
+
+select({start,Area}, State) ->
+    KM = epxw:keymod(),
+    OldRect = State#state.selection,
+    epxw:invalidate(OldRect),
+    epxw:invalidate(Area),
+    Sel0 = if KM#keymod.shift -> State#state.selected; true -> [] end,
+    case State#state.operation of
+	select ->
+	    Sel = select_area(Area,State#state.graph, Sel0),
+	    State#state {   selected = Sel, selection = Area };
+	_ ->
+	    State
+    end;
+select({continue,Area}, State) ->
+    case State#state.operation of
+	select ->
+	    KM = epxw:keymod(),
+	    OldRect = State#state.selection,
+	    epxw:invalidate(OldRect),
+	    epxw:invalidate(Area),
+	    Sel0 = if KM#keymod.shift -> State#state.selected; true -> [] end,
+	    Sel = select_area(Area,State#state.graph, Sel0),
+	    State#state {  selected = Sel, selection = Area };
+	_ ->
+	    State
+    end;
+select({stop,_Area}, State) ->
+    case State#state.operation of
+	select ->
+	    State#state { operation = none, selection = undefined };
+	_ ->
+	    State
+    end.
 
 %%
 %% key commands:
@@ -638,113 +587,119 @@ clr_mod(M, []) -> M.
 %%   q                        find greedy clique
 %%   o                        find greedy vertex cover
 %%
-command(up, Selected, _Mod, State) ->
+
+command(Sym, Mod, State) ->
+    io:format("command = ~w,~w once=~p\n", 
+	      [Sym,Mod,State#state.selected_once]),
+    {Selected,State1}  = case State#state.selected_once of
+			     [] -> {State#state.selected, State};
+			     Sel -> {Sel, State#state { selected_once = [] }}
+			 end,
+    case command_(Sym, Mod, Selected, State1) of
+	false ->
+	    {reply, {Sym,Mod}, State1};  %% use default handler, unmodified
+	State2 ->
+	    epxw:invalidate(),
+	    {noreply,State2}
+    end.
+
+command_(up, _Mod, Selected, State) ->
     Dir = case State#state.grid of
 	      undefined -> {0,-1};
 	      {_Xs,Ys} -> {0,-Ys}
 	  end,
     G = move_vertices(Selected, Dir, State#state.graph),
     State#state { graph=G };
-command(down, Selected, _Mod, State) ->
+command_(down, _Mod, Selected, State) ->
     Dir = case State#state.grid of
 	      undefined -> {0,1};
 	      {_Xs,Ys} -> {0,Ys}
 	  end,
     G = move_vertices(Selected, Dir, State#state.graph),
     State#state { graph=G };
-command(left, Selected, _Mod, State) ->
+command_(left, _Mod, Selected, State) ->
     Dir = case State#state.grid of
 	      undefined -> {-1,0};
 	      {Xs,_Ys} -> {-Xs,0}
 	  end,
     G = move_vertices(Selected, Dir, State#state.graph),
     State#state { graph=G };
-command(right, Selected, _Mod, State) ->
+command_(right, _Mod, Selected, State) ->
     Dir = case State#state.grid of
 	      undefined -> {1,0};
 	      {Xs,_Ys} -> {Xs,0}
 	  end,
     G = move_vertices(Selected, Dir, State#state.graph),
     State#state { graph=G };
-command(Command, Selected, Mod, State) when Command >= $0, Command =< $9,
-					    Mod#keymod.ctrl ->
+command_(Command, Mod, Selected, State) when Command >= $0, Command =< $9,
+					     Mod#keymod.ctrl ->
+    io:format("set color = ~w of ~p\n", [Command-$0, Selected]),
     G = set_vertices(Selected, [{color,Command-$0}],State#state.graph),
     State#state { graph=G };
-command(Command, Selected, Mod, State) when Command >= $0, Command =< $9,
-					    Mod#keymod.alt ->
+command_(Command, Mod, Selected, State) when Command >= $0, Command =< $9,
+					     Mod#keymod.alt ->
     G = set_vertices(Selected, [{shape,shape(Command-$0)}],State#state.graph),
     State#state { graph=G };
-command($\e, _Selected, _Mod, State) ->
-    %% escape from operation, fixme stop ongoing operations
-    epx:window_disable_events(State#state.window,[motion]),
-    State#state { operation = none };
-command($\b, Selected, _Mod, State) ->
+command_($\b, _Mod, Selected, State) ->
     G = kill_graph(Selected, State#state.graph),
     State#state { graph=G, selected = [] };
-command($x, Selected, Mod, State) when Mod#keymod.ctrl ->
+command_($x, Mod, Selected, State) when Mod#keymod.ctrl ->
     {G,Clip} = if Selected =:= [] ->
 		       {State#state.graph, State#state.clip};
 		  true ->
 		       cut_graph(Selected, State#state.graph)
 	       end,
     State#state { graph=G, clip=Clip, selected = [] };
-command($c, Selected, Mod, State) when Mod#keymod.ctrl ->
+command_($c, Mod, Selected, State) when Mod#keymod.ctrl ->
     G = if Selected =:= [] -> State#state.graph;
 	   true -> copy_graph(Selected, State#state.graph)
 	end,
     State#state { clip=G };
-command($v, _Selected, Mod, State) when Mod#keymod.ctrl ->
+command_($v, Mod, _Selected, State) when Mod#keymod.ctrl ->
     Pos = case State#state.pt of
 	      undefined ->
-		  zm({State#state.width div 2,State#state.height div 2},
-		     State#state.zoom);
-	      Pt -> Pt
+		  %% FIXME: pase in visible area! get window in view coords!
+		  W = epxw:width(),
+		  H = epxw:height(),
+		  {W div 2, H div 2};
+	      Pt ->
+		  Pt
 	  end,
     {G,Vs} = paste_graph(State#state.graph, State#state.clip, Pos),
     State#state { graph=G, selected = Vs };
-command($s, _Selected, Mod, State) when Mod#keymod.ctrl ->
+command_($s, Mod, _Selected, State) when Mod#keymod.ctrl ->
     graph:save("graph.g", State#state.graph),
     State;
-command($C, Selected, _Mod, State) ->
+command_($C, _Mod, Selected, State) ->
     G = complete_graph(Selected, State#state.graph, State),
     State#state { graph=G };
-command($I, Selected, _Mod, State) ->
+command_($I, _Mod, Selected, State) ->
     G = complement_graph(Selected, State#state.graph, State),
     State#state { graph=G };
-command($G, _Selected, _Mod, State) ->
+command_($G, _Mod, _Selected, State) ->
     Grid = case State#state.grid of
 	       undefined -> {8,8};
 	       _ -> undefined
 	   end,
     State#state { grid = Grid };
-command($+, _Selected, _Mod, State) ->
-    %% fixme: make fixed steps? more predictable (yes!)
-    Zoom = min(100.0, State#state.zoom * 1.07),
-    %% io:format("Zoom factor ~w\n", [Zoom]),
-    State#state { zoom = Zoom };
-command($-, _Selected, _Mod, State) ->
-    Zoom = max(0.01, State#state.zoom / 1.07),
-    %% io:format("Zoom factor ~w\n", [Zoom]),
-    State#state { zoom = Zoom };
-command($r, _Selected, _Mod, State) ->
+command_($r, _Mod, _Selected, State) ->
     ColorMap = graph_color:greedy(State#state.graph),
     io:format("Colors = ~p\n", [ColorMap]),
     G = maps:fold(fun(V,Color,Gi) ->
 			  graph:put_vertex(V, [{color,Color}], Gi)
 		  end, State#state.graph, ColorMap),
     State#state { graph = G };
-command($q, _Selected, _Mod, State) ->
+command_($q, _Mod, _Selected, State) ->
     Vs = graph_clique:greedy(State#state.graph),
     io:format("Clique = ~p\n", [Vs]),
     State#state { selected = Vs };
-command($o, _Selected, _Mod, State) ->
+command_($o, _Mod, _Selected, State) ->
     Vs = graph_vertex_cover:greedy(State#state.graph),
     io:format("Cover = ~p\n", [Vs]),
     State#state { selected = Vs };
-    
-command(Command, _Selected, _Mod, State) ->
-    io:format("Command = ~p\n", [Command]),
-    State.
+command_(_Command, _Mod, _Selected, _State) ->
+    io:format("Command = ~p, Mod = ~p\n", [_Command, _Mod]),
+    false.
 
 shape(0) -> ellipse;
 shape(1) -> rectangle;
@@ -811,42 +766,6 @@ create_menu_profile(Profile) ->
        background_color = Profile#profile.menu_background_color,
        border_color     = Profile#profile.menu_border_color
       }.
-
-create_window_profile(Profile) ->
-    #window_profile {
-       scheme           = Profile#profile.scheme,
-       font_name        = Profile#profile.window_font_name,
-       font_size        = Profile#profile.window_font_size,
-       font_color       = Profile#profile.window_font_color,
-       scroll_bar_color = Profile#profile.scroll_bar_color,
-       scroll_hndl_color = Profile#profile.scroll_hndl_color,
-       scroll_horizontal = Profile#profile.scroll_horizontal,
-       scroll_vertical   = Profile#profile.scroll_vertical,
-       top_bar_color     = Profile#profile.top_bar_color,
-       left_bar_color    = Profile#profile.left_bar_color,
-       right_bar_color   = Profile#profile.right_bar_color,
-       bottom_bar_color  = Profile#profile.bottom_bar_color
-      }.
-
-resize_pixmap(undefined, W, H) ->
-    Pixmap = next_pixmap(W,H),
-    epx:pixmap_attach(Pixmap),
-    Pixmap;
-resize_pixmap(Pixmap, W, H) ->
-    case epx:pixmap_info(Pixmap,[width,height]) of
-	[{width,PW},{height,PH}] when PW < W; PH < H ->
-	    epx:pixmap_detach(Pixmap),
-	    Pixmap1 = next_pixmap(W,H),
-	    epx:pixmap_attach(Pixmap1),
-	    Pixmap1;
-	_ ->
-	    Pixmap
-    end.
-
-next_pixmap(W,H) ->
-    NPW = 1 bsl ceil(math:log2(W)),
-    NPH = 1 bsl ceil(math:log2(H)),
-    epx:pixmap_create(NPW, NPH, argb).
 
 complete_graph(Vs, G, State) ->
     lists:foldl(
@@ -975,23 +894,14 @@ graph_center_([],X,Y,_G) ->
 offset_graph(G, Offset) ->
     move_vertices(graph:vertices(G), Offset, G).
 
-%% scale vertex list
-scale_vertices([V|Vs], Scale, Center, G) ->
-    Pos = get_vertex_coord(V, G),
-    Pos1 = coords_add(scale(coords_sub(Pos, Center), Scale), Center),
-    G1 = set_vertex_pos(V, G, Pos1),
-    scale_vertices(Vs, Scale, Center, G1);
-scale_vertices([], _Scale, _Center, G) ->
-    G.
-
 %% fixme only select first!
-select(Pos,G,Selected) ->
+select_pos(Pos,G,Selected) ->
     graph:fold_vertices(
       fun(V, Sel) ->
 	      case lists:member(V, Sel) of
 		  false ->
 		      Rv = vertex_rect(V, G),
-		      case point_in_rect(Pos, Rv) of
+		      case epx_rect:contains(Rv,Pos) of
 			  true ->
 			      [V | Sel];
 			  false ->
@@ -1029,11 +939,10 @@ coords_add({X1,Y1},{X0,Y0}) ->
     {X1+X0,Y1+Y0}.
 
 coords_to_rect({X0,Y0},{X1,Y1}) ->
-    X = min(X0,X1),
-    Y = min(Y0,Y1),
-    W = abs(X1-X0) + 1,
-    H = abs(Y1-Y0) + 1,
-    {X,Y,W,H}.
+    coords_to_rect_(min(X0,X1),max(X0,X1),min(Y0,Y1),max(Y0,Y1)).
+
+coords_to_rect_(X0,X1,Y0,Y1) ->
+    {X0,Y0,X1-X0,Y1-Y0}.
 
 get_vertex_coord(V,G) ->
     {graph:get_vertex_by_id(V, x, G, 0), graph:get_vertex_by_id(V, y, G, 0)}.
@@ -1057,59 +966,21 @@ rect_overlap(R1,R2) ->
 	_ -> true
     end.
 
-point_in_rect({X1,Y1}, {X2,Y2,W,H}) ->
-    (X1 >= X2) andalso (X1 =< X2+W-1) andalso
-    (Y1 >= Y2) andalso (Y1 =< Y2+H-1).
-
-maybe_invalidate(true, State) ->
-    invalidate(State);
-maybe_invalidate(_, _) ->
-    ok.
-
-invalidate(State) ->
-    self() ! {epx_event, State#state.window, redraw}.
-
-flush_redraw(State) ->
-    receive
-	{epx_event, Window, redraw} when State#state.window =:= Window ->
-	    flush_redraw(State)
-    after 0 ->
-	    State
-    end.
-
 alpha_color(A,{_,R,G,B}) -> {A,R,G,B};
 alpha_color(A,{R,G,B}) -> {A,R,G,B};
 alpha_color(A,Name) when is_list(Name); is_atom(Name) ->
     alpha_color(A, epx_color:from_name(Name)).
 
-menu(global) ->
-    [
-     {"Cut", "Ctrl+X"},
-     {"Copy", "Ctrl+C"},
-     {"Paste", "Ctrl+V"},
-     {"Delete", "Del"},
-     {"---", ""},
-     {"Save",  "Ctrl+S"},
-     {"---", ""},
-     {"Complete", "Shift+C"},
-     {"Complement", "Shift+I"},
-     {"Snap to grid", "Shift+G"},
-     {"Zoom in", "+"},
-     {"Zoom out", "-"},
-     {"Colour", "R"},
-     {"Clique", "Q"},
-     {"Vertex Cover", "O"}
-    ].
-
 
 %% FIXME when using operation=move only draw the selected subgraph
 %% avoid redraw all node
-draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
-    Zoom = State#state.zoom,
+
+draw(Pixels, _Dirty, State = #state { graph = G, selected = Selected, 
+				      profile = Profile }) ->
     Grid = State#state.grid,
     Scheme = Profile#profile.scheme,
     ScreenColor = epx_profile:color(Scheme, Profile#profile.screen_color),
-    epx:pixmap_fill(State#state.pixels,ScreenColor),
+    epx:pixmap_fill(Pixels,ScreenColor),
     epx_gc:set_fill_style(solid),
     Offset = if State#state.operation =:= move ->
 		     coords_sub(State#state.pt2,State#state.pt1);
@@ -1130,19 +1001,19 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 			 false -> Vxy0
 		     end,
 	      Vxy2 = snap(Vxy1, Grid),
-	      Vxy3 = scale(Vxy2, Zoom),
+	      Vxy3 = Vxy2,
 	      Wxy0 = get_vertex_coord(W, G),
 	      Wxy1  = case lists:member(W, Selected) of
 			  true -> coords_add(Wxy0,Offset);
 			  false -> Wxy0
 		      end,
 	      Wxy2 = snap(Wxy1, Grid),
-	      Wxy3 = scale(Wxy2, Zoom),
+	      Wxy3 = Wxy2,
 	      Color = graph:get_edge_by_id(E, color, G, EdgeColor),
 	      RGB = epx_profile:color(Scheme, Color),
 	      epx_gc:set_foreground_color(RGB),
-	      epx_gc:set_line_width(zm(1,Zoom)),
-	      epx:draw_line(State#state.pixels,Vxy3, Wxy3),
+	      epx_gc:set_line_width(1), %% scale me!
+	      epx:draw_line(Pixels,Vxy3, Wxy3),
 	      Acc
       end, [], G),
 
@@ -1157,24 +1028,27 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 	      Rect1 = 
 		  case lists:member(V, Selected) of
 		      true ->
-			  Bw1 = zm(Profile#profile.vertex_select_border_width,Zoom),
+			  %% scale me!
+			  Bw1 = Profile#profile.vertex_select_border_width,
 			  epx_gc:set_border_width(Bw1),
 			  epx_gc:set_border_color(VertexSelectBorderColor),
 			  rect_offset(Rect0, Offset);
 		      false ->
-			  Bw2 = zm(Profile#profile.vertex_border_width,Zoom),
+			  %% scale me!
+			  Bw2 = Profile#profile.vertex_border_width,
 			  epx_gc:set_border_width(Bw2),
 			  epx_gc:set_border_color(VertexBorderColor),
 			  Rect0
 		  end,
 	      Rect2 = snap(Rect1, Grid),
-	      Rect  = scale(Rect2, Zoom),
+	      Rect  = Rect2,
 	      %% high light vertext under pt2
 	      if State#state.operation =:= edge ->
 		      %% check with snap?
-		      case point_in_rect(State#state.pt2, Rect1) of 
+		      case epx_rect:contains(Rect1,State#state.pt2) of 
 			  true ->
-			      Bw3 = zm(Profile#profile.vertex_highlight_border_width,Zoom),
+			      %% scale me!
+			      Bw3 = Profile#profile.vertex_highlight_border_width,
 			      epx_gc:set_border_width(Bw3),
 			      epx_gc:set_border_color(VertexHighLightBorderColor),
 			      epx_gc:set_fill_color(VertexHighLightColor);
@@ -1192,35 +1066,33 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 	      end,
 	      case vertex_shape(V, G) of
 		  ellipse ->
-		      epx:draw_ellipse(State#state.pixels,Rect);
+		      epx:draw_ellipse(Pixels,Rect);
 		  rectangle ->
-		      epx:draw_rectangle(State#state.pixels,Rect);
+		      epx:draw_rectangle(Pixels,Rect);
 		  roundrect ->
-		      Rw = zm(8, Zoom),
-		      Rh = zm(8, Zoom),
-		      epx:draw_roundrect(State#state.pixels,Rect,Rw,Rh);
+		      %% scale me!
+		      Rw = 8,
+		      Rh = 8,
+		      epx:draw_roundrect(Pixels,Rect,Rw,Rh);
 		  triangle ->
 		      {X,Y,W,H} = Rect,
 		      P0 = {X + (W / 2), Y},
 		      P1 = {X, Y+H-1},
 		      P2 = {X+W-1, Y+H-1},
-		      epx:draw_triangle(State#state.pixels,
-					P0, P1, P2)
+		      epx:draw_triangle(Pixels, P0, P1, P2)
 	      end,
 	      Acc
       end, [], G),
 
     SelectionColor = epx_profile:color(Scheme, Profile#profile.selection_color),
     EdgeHighLightColor = epx_profile:color(Scheme, Profile#profile.edge_highlight_color),
-    if State#state.pt1 =/= undefined, State#state.operation =:= menu ->
-	    epx_menu:draw(State#state.menu, State#state.pixels, 
-			  State#state.pt1);
-       State#state.pt1 =:= undefined; State#state.pt2 =:= undefined ->
+    if State#state.pt1 =:= undefined; State#state.pt2 =:= undefined ->
 	    ok;
        true ->
 	    case State#state.operation of
 		select ->
-		    Bw4 = zm(Profile#profile.selection_border_width,Zoom),
+		    %% scale me!
+		    Bw4 = Profile#profile.selection_border_width,
 		    Bc = Profile#profile.selection_border_color,
 		    epx_gc:set_border_color(epx_profile:color(Scheme,Bc)),
 		    epx_gc:set_border_width(Bw4),
@@ -1228,62 +1100,33 @@ draw(State = #state { graph = G, selected = Selected, profile = Profile }) ->
 					SelectionColor),
 		    epx_gc:set_fill_color(Color),
 		    epx_gc:set_fill_style(blend),
-		    Rect = scale(coords_to_rect(State#state.pt1,State#state.pt2), Zoom),
-		    epx:draw_rectangle(State#state.pixels, Rect);
+		    Rect = coords_to_rect(State#state.pt1,State#state.pt2),
+		    epx:draw_rectangle(Pixels, Rect);
 		edge ->
 		    epx_gc:set_foreground_color(EdgeHighLightColor),
-		    epx_gc:set_line_width(zm(1,Zoom)),
-		    Pt1 = scale(State#state.pt1, Zoom),
-		    Pt2 = scale(State#state.pt2, Zoom),
-		    epx:draw_line(State#state.pixels, Pt1, Pt2);
+		    %% scale me!
+		    epx_gc:set_line_width(1),
+		    {X1,Y1} = State#state.pt1,
+		    {X2,Y2} = State#state.pt2,
+		    epx:draw_line(Pixels, X1, Y1, X2, Y2);
 		_ ->
 		    ok
 	    end
     end,
-
-    epx:pixmap_draw(State#state.pixels, State#state.window,
-		    0, 0, 0, 0, 
-		    State#state.width, State#state.height).
-
-
-zm(W,Zoom) -> max(1, W*Zoom).
-zm(X,Y,Zoom) -> {X*Zoom, Y*Zoom}.
-
-izm(W,Zoom) -> max(1, W/Zoom).
-izm(X,Y,Zoom) -> {X/Zoom, Y/Zoom}.
+    case State#state.selection of
+	undefined -> empty;
+	{_,_,Sw,Sh} when Sw < 2, Sh < 2 -> empty;
+	Selection ->
+	    epx_gc:set_fill_style(blend),
+	    epx_gc:set_fill_color({127,127,127,127}),
+	    epx_gc:set_border_color(black),
+	    epx_gc:set_border_width(2),
+	    epx:draw_rectangle(Pixels, Selection)
+    end,
+    State.
 
 snap(PointOrRect, undefined) -> PointOrRect;
 snap({X,Y}, {Xs, Ys}) ->
     {Xs*trunc(X / Xs), Ys*trunc(Y / Ys)};
 snap({X,Y,W,H}, {Xs, Ys}) ->
     {Xs*trunc(X / Xs), Ys*trunc(Y / Ys), W, H}.
-
-
-scale(PointOrRect, Scale) when Scale == 1 -> PointOrRect;
-scale({X,Y}, Zoom) ->
-    {X*Zoom, Y*Zoom};
-scale({X,Y,W,H}, Zoom) ->
-    {X*Zoom, Y*Zoom, max(1,W*Zoom), max(1,H*Zoom)}.
-
-%% catch up with motions
-flush_motions(Window) ->
-    receive
-	{epx_event,Window,{motion,_,_}} ->
-	    flush_motions(Window)
-    after 0 ->
-	    ok
-    end.
-
-flush_wheel(Window) ->
-    receive
-	{epx_event,Window,{_,[wheel_down],_}} ->
-	    flush_wheel(Window);
-	{epx_event,Window,{_,[wheel_left],_}} ->
-	    flush_wheel(Window);
-	{epx_event,Window,{_,[wheel_right],_}} ->
-	    flush_wheel(Window);
-	{epx_event,Window,{_,[wheel_up],_}} ->
-	    flush_wheel(Window)
-    after 0 ->
-	    ok
-    end.

@@ -69,14 +69,14 @@
 %% edge key is either:
 %% UNDIRECTED graph
 %%    Key        Value
-%%    e1         #{ id=>e1, pt1=>a, pt2=>b     (a < b)
-%%    e2         #{ id=>e2, pt1=>b, pt2=>c     (b < c)
+%%    e1         #{ id=>e1, pt1=>a, pt2=>b }    (a < b)
+%%    e2         #{ id=>e2, pt1=>b, pt2=>c }    (b < c)
 %%
 %% DIRECTED graph
 %%    Key        Value
-%%    e1         #{ id=e1, pt1 => a, pt2 => b
-%%    e2         #{ id=e2, pt1 => a, pt2 => c
-%%    e3         #{ id=e3, pt1 => d, pt2 => b
+%%    e1         #{ id=e1, pt1 => a, pt2 => b }
+%%    e2         #{ id=e2, pt1 => a, pt2 => c }
+%%    e3         #{ id=e3, pt1 => d, pt2 => b }
 %%
 
 new() ->
@@ -301,8 +301,9 @@ put_edge(A0,B0,Props,G=#{ ?TYPE:=graph,e:=Es,is_digraph:=Digraph}) ->
 
 
 insert_edge_(A,B,E,Props,G=#{?TYPE:=graph}) when A =/= B ->
-    Ex = #{ ?TYPE=>edge,?ID=>E,?PT1=>A,?PT2=>B},
-    add_edge_(A,B,E,Ex,Props,G).
+    E1 = if E =:= undefined -> unique_edge(); true -> E end,
+    Ex = #{ ?TYPE=>edge,?ID=>E1,?PT1=>A,?PT2=>B},
+    add_edge_(A,B,E1,Ex,Props,G).
 
 add_edge_(A,B,E,Ex,Props0,G=#{?TYPE:=graph,e:=Es0,v:=Vs0}) when A =/= B ->
     Ax  = put_vertex_(A,[],Vs0),
