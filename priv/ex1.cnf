@@ -1,0 +1,11 @@
+c example 1
+c Xab is 1
+c Xac is 2
+c Xbc is 3
+p snf 3 6
+1 2 0
+1 3 0
+2 3 0
+-1 -2 0
+-1 -3 0
+-2 -3 0

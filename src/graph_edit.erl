@@ -11,11 +11,13 @@
 -behaviour(epxw).
 
 %% API
--export([start/0]).
--export([graph/1]).
--export([load/1, load_mac/1, load_matrix/1]).
--export([save/1]).
--export([set_graph/1]).
+-export([graph/1, graph_link/1]).
+-export([start/0, start_link/0]).
+-export([start/1, start_link/1]).
+
+-export([load/2, load_mac/2, load_matrix/2]).
+-export([save/2]).
+-export([set_graph/2]).
 -export([shape/1]).
 
 %% epxw/gen_server callbacks
@@ -41,6 +43,8 @@
 
 -include_lib("epx/include/epx_menu.hrl").
 -include_lib("epx/include/epx_window_content.hrl").
+
+-define(dbg(F,A), ok).
 
 %% color profile with default values
 -record(profile,
@@ -165,14 +169,20 @@ menu(edge_ctrl) ->
 graph(G) ->
     start([{graph,G}]).
 
-start() ->
-    start([]).
+graph_link(G) ->
+    start_link([{graph,G}]).
 
-start(_Opts0) ->
+start() -> start([]).
+start(Opts) -> start_(start,Opts).
+
+start_link() -> start_link([]).
+start_link(Opts) -> start_(start_link,Opts).
+
+start_(Start, Opts) ->
     application:ensure_all_started(epx),
     application:load(graph),
-    epxw:start(?MODULE,
-	       [hello,world],
+    epxw:Start(?MODULE,
+	       Opts,
 	       [{title, "MacGraphII"},
 		{scroll_horizontal, bottom},  %% none|top|bottom
 		{scroll_vertical,   right},   %% none|left|right
@@ -188,20 +198,20 @@ start(_Opts0) ->
 		{view_width,?WIDTH},
 		{view_height,?HEIGHT}]).
 
-load(File) ->
-    gen_server:call(?SERVER, {load, File}).
+load(Pid,File) ->
+    gen_server:call(Pid, {load, File}).
 
-save(File) ->
-    gen_server:call(?SERVER, {save, File}).
+save(Pid,File) ->
+    gen_server:call(Pid, {save, File}).
 
-load_matrix(File) ->
-    gen_server:call(?SERVER, {load_matrix, File}).
+load_matrix(Pid,File) ->
+    gen_server:call(Pid, {load_matrix, File}).
 
-load_mac(File) ->
-    gen_server:call(?SERVER, {load_mac, File}).
+load_mac(Pid,File) ->
+    gen_server:call(Pid, {load_mac, File}).
 
-set_graph(G) ->
-    gen_server:call(?SERVER, {set_graph, G}).
+set_graph(Pid,G) ->
+    gen_server:call(Pid, {set_graph, G}).
 
 %%%===================================================================
 %%% gen_server callbacks
@@ -452,10 +462,10 @@ button_press(_Event, State) ->
     State.
 
 button_release(_Event={_,_,Pos}, State) ->
-    io:format("button release ~p\n", [_Event]),
+    ?dbg("button release ~p\n", [_Event]),
     case State#state.operation of
 	move ->
-	    io:format("move done\n"),
+	    ?dbg("move done\n", []),
 	    Selected = State#state.selected,
 	    Offset = coords_sub(State#state.pt2, State#state.pt1),
 	    G = move_vertices(Selected,Offset,State#state.graph),
@@ -496,7 +506,7 @@ button_release(_Event={_,_,Pos}, State) ->
     end.
 
 motion({motion,_Button,Pos}, State) ->
-    io:format("motion ~p\n", [Pos]),
+    ?dbg("motion ~p\n", [Pos]),
     case State#state.operation of
 	move ->
 	    epxw:invalidate(),
@@ -528,7 +538,7 @@ menu({menu,Pos}, State) ->
 		    {reply, State#state.vertex_ctrl_menu,
 		     State#state { selected_once = [V] }};
 		false ->
-		    io:format("once = ~p\n", [[V]]),
+		    ?dbg("once = ~p\n", [[V]]),
 		    {reply, State#state.vertex_ctrl_menu,
 		     State#state { selected_once = [V] }}
 	    end
@@ -589,8 +599,8 @@ select({stop,_Area}, State) ->
 %%
 
 command(Sym, Mod, State) ->
-    io:format("command = ~w,~w once=~p\n", 
-	      [Sym,Mod,State#state.selected_once]),
+    ?dbg("command = ~w,~w once=~p\n", 
+	 [Sym,Mod,State#state.selected_once]),
     {Selected,State1}  = case State#state.selected_once of
 			     [] -> {State#state.selected, State};
 			     Sel -> {Sel, State#state { selected_once = [] }}
@@ -633,7 +643,7 @@ command_(right, _Mod, Selected, State) ->
     State#state { graph=G };
 command_(Command, Mod, Selected, State) when Command >= $0, Command =< $9,
 					     Mod#keymod.ctrl ->
-    io:format("set color = ~w of ~p\n", [Command-$0, Selected]),
+    ?dbg("set color = ~w of ~p\n", [Command-$0, Selected]),
     G = set_vertices(Selected, [{color,Command-$0}],State#state.graph),
     State#state { graph=G };
 command_(Command, Mod, Selected, State) when Command >= $0, Command =< $9,
@@ -684,21 +694,21 @@ command_($G, _Mod, _Selected, State) ->
     State#state { grid = Grid };
 command_($r, _Mod, _Selected, State) ->
     ColorMap = graph_color:greedy(State#state.graph),
-    io:format("Colors = ~p\n", [ColorMap]),
+    ?dbg("Colors = ~p\n", [ColorMap]),
     G = maps:fold(fun(V,Color,Gi) ->
 			  graph:put_vertex(V, [{color,Color}], Gi)
 		  end, State#state.graph, ColorMap),
     State#state { graph = G };
 command_($q, _Mod, _Selected, State) ->
     Vs = graph_clique:greedy(State#state.graph),
-    io:format("Clique = ~p\n", [Vs]),
+    ?dbg("Clique = ~p\n", [Vs]),
     State#state { selected = Vs };
 command_($o, _Mod, _Selected, State) ->
     Vs = graph_vertex_cover:greedy(State#state.graph),
-    io:format("Cover = ~p\n", [Vs]),
+    ?dbg("Cover = ~p\n", [Vs]),
     State#state { selected = Vs };
 command_(_Command, _Mod, _Selected, _State) ->
-    io:format("Command = ~p, Mod = ~p\n", [_Command, _Mod]),
+    ?dbg("Command = ~p, Mod = ~p\n", [_Command, _Mod]),
     false.
 
 shape(0) -> ellipse;

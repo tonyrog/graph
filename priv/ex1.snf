@@ -1,0 +1,8 @@
+c example 1
+p snf 3 6
+Xab Xac.
+Xab Xbc.
+Xac Xbc.
+!Xab !Xac.
+!Xab !Xbc.
+!Xac !Xbc.
