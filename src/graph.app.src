@@ -1,6 +1,8 @@
 {application, graph,
  [{description, "graph library"},
   {vsn, git},
+  {modules, ["@@MODULES@@"]},  
   {env, []},
   {applications,[kernel,stdlib]}
+  %% optional epx for graph_edit
   ]}.
