@@ -44,19 +44,7 @@ is_isomorphic_1(G, H) ->
 	    io:format("|H1|=~w, H1=~w\n", [length(Hc),Hc]),
 	    is_isomorphic_2(G1, H1)
     end.
-
-fan_class1(G) ->
-    Vs = graph:vertices(G),
-    fan_class1(G, Vs, #{}).
-
-fan_class1(G, [V|Vs], Set) ->
-    Fi = graph:fanin(V,G),
-    Fo = graph:fanout(V,G),
-    fan_class1(graph:put_vertex(V, [{class,{Fi,Fo}}], G),
-	      Vs, class_add({Fi,Fo},Set));
-fan_class1(G, [], Set) ->
-    {G, Set}.
-
+	
 
 %% now build the fan class based on neighbour classes
 %% class2 = #{ {Fi,Fo} => Count1, {Fi,Fo} = Count2 ... }
@@ -77,25 +65,82 @@ is_isomorphic_2(G, H) ->
 is_isomorphic_3(_G, _H) -> 
     maybe.
 
+
+fan_class1(G) ->
+    Vs = graph:vertices(G),
+    %% create a fanin/fanout number pair
+    L = [{V,{graph:fanin(V,G),graph:fanout(V,G)}} || V <- Vs],
+    %% map to "class" numbers
+    ClassList = class_list(L),
+    %% create a graph class signature
+    Signature = graph_signature(ClassList),
+    %% assign ClassList to vertices
+    G1 = lists:foldl(fun({V,Class},Gi) ->
+			     graph:put_vertex(V,
+					      [{class,Class},{color,Class}], Gi)
+		     end, G, ClassList),
+    {G1, Signature}.
+
+
 fan_class2(G) ->
     Vs = graph:vertices(G),
-    fan_class2(G, Vs, #{}).
+    %% create a fanin/fanout number pair
+    L = [{V,{ns_in_class(V,G),ns_out_class(V,G)}} || V <- Vs],
+    io:format("L = ~p\n", [L]),
+    %% map to "class" numbers
+    ClassList = class_list(L),
+    io:format("ClassList = ~p\n", [ClassList]),
+    %% create a graph class signature
+    Signature = graph_signature(ClassList),
+    %% assign ClassList to vertices
+    G1 = lists:foldl(fun({V,Class},Gi) ->
+			     graph:put_vertex(V, 
+					      [{class,Class},{color,Class}], 
+					      Gi)
+		     end, G, ClassList),
+    {G1, Signature}.
 
-fan_class2(G, [V|Vs], Set) ->
-    Nsi = graph:in_neighbours(V, G),
-    Nso = graph:out_neighbours(V, G),
-    Si = fan_class2_ns(Nsi, G, #{}),
-    So = fan_class2_ns(Nso, G, #{}),
-    fan_class2(graph:put_vertex(V, [{class2,{Si,So}}], G),
-	       Vs, class_add({Si,So},Set));
-fan_class2(G, [], Set) ->
-    {G, Set}.
+ns_in_class(V, G) ->
+    Ns = graph:in_neighbours(V, G),
+    io:format("in of ~p =  ~p\n", [V, Ns]),
+    ns_class(V, Ns, G).
+
+ns_out_class(V, G) ->
+    Ns = graph:out_neighbours(V, G),
+    io:format("out of ~p =  ~p\n", [V, Ns]),
+    ns_class(V, Ns, G).
+
+ns_class(V, Ws, G) ->
+    L = [{W,graph:get_vertex_by_id(W, class, G)} || W <- Ws],
+    io:format("ns_class L = ~p\n", [L]),
+    %%ClassList = class_list(L),
+    %% io:format("ns_class ClassList = ~p\n", [ClassList]),
+    Signature = graph_signature(L),
+    io:format("ns_class Signature = ~p\n", [Signature]),
+    Class = {graph:get_vertex_by_id(V, class, G), Signature},
+    io:format("ns_class Class = ~p\n", [Class]),
+    Class.
+
     
-fan_class2_ns([W|Ws], G, Set) ->
-    FiFo = graph:get_vertex_by_id(W, class, G),
-    fan_class2_ns(Ws, G, class_add(FiFo, Set));
-fan_class2_ns([], _G, Set) ->
-    Set.
+
+%% from [{vertex,class}] => [{class,count}]
+graph_signature(VCList) ->
+    M = lists:foldl(fun({_V,Class},Si) -> class_add(Class,Si) end, #{}, VCList),
+    lists:keysort(1, maps:to_list(M)).
+    
+%% from [{vertex,data}] create {vertex,class-num}
+class_list(VDList) ->
+    class_list(VDList, #{}, 1, []).
+
+class_list([{V,Data}|Vs], Set, I, Acc) ->
+    case maps:get(Data, Set, undefined) of
+	undefined ->
+	    class_list(Vs, Set#{ Data=>I }, I+1, [{V,I}|Acc]);
+	J ->
+	    class_list(Vs, Set, I, [{V,J}|Acc])
+    end;
+class_list([], _Set, _I, Acc) ->
+    Acc.
 
 %% return a list of lists of vertex groups sorted by key
 
