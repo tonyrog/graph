@@ -118,7 +118,7 @@ load(File) ->
 	    try load_(Fd) of
 		eof -> {error, nograph};
 		Error = {error,_} -> Error;
-		{ok,G} -> G
+		{ok,G} -> {ok,G}
 	    after
 		file:close(Fd)
 	    end;

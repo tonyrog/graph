@@ -11,6 +11,7 @@
 -behaviour(epxw).
 
 %% API
+-export([open/1]).
 -export([graph/1, graph_link/1]).
 -export([start/0, start_link/0]).
 -export([start/1, start_link/1]).
@@ -45,6 +46,7 @@
 -include_lib("epx/include/epx_window_content.hrl").
 
 -define(dbg(F,A), ok).
+-define(error(F,A), io:format((F),(A))).
 
 %% color profile with default values
 -record(profile,
@@ -71,10 +73,10 @@
 	 edge_select_color             = green2,
 	 edge_highlight_color          = ?WHITE,
 	 label_font                    = "Arial",
-	 label_font_size               = 12,
-	 label_font_color              = ?WHITE,
-	 label_background_color        = ?BLACK,
-	 label_border_color            = yellow,
+	 label_font_size               = 10,
+	 label_font_color              = ?BLACK,
+	 label_background_color        = ?WHITE,
+	 label_border_color            = black,
 	 menu_font_name                = "Arial",
 	 menu_font_size                = 14,
 	 menu_font_color               = ?WHITE,
@@ -111,7 +113,10 @@
 	 vertex_ctrl_menu,
 	 vertex_alt_menu,
 	 edge_ctrl_menu,
-	 label_font
+	 label_font,
+	 label_font_size,
+	 label_font_color,
+	 label_background_color
 	}).
 
 menu(graph) ->
@@ -130,7 +135,9 @@ menu(graph) ->
      {"Zoom out", "-"},
      {"Colour", "R"},
      {"Clique", "Q"},
-     {"Vertex Cover", "O"}
+     {"Vertex Cover", "O"},
+     {"ISO", "1"},
+     {"ISO2", "2"}
     ];
 menu(vertex_ctrl) ->
     [
@@ -165,6 +172,10 @@ menu(edge_ctrl) ->
 %%%===================================================================
 %%% API
 %%%===================================================================
+
+open(File) ->
+    {ok,G} = graph:load(File),
+    graph(G).
 
 graph(G) ->
     start([{graph,G}]).
@@ -241,13 +252,20 @@ init(Options) ->
     VertexCtrlMenu = epx_menu:create(MenuProfile, menu(vertex_ctrl)),
     VertexAltMenu = epx_menu:create(MenuProfile, menu(vertex_alt)),
     EdgeCtrlMenu = epx_menu:create(MenuProfile, menu(edge_ctrl)),
+    {ok,LabelFont} = epx_font:match([{name,Profile#profile.label_font},
+				     {size,Profile#profile.label_font_size}]),
+    LabelFontColor = Profile#profile.label_font_color,
+    LabelBgColor = Profile#profile.label_background_color,
 
     State = #state{ profile = Profile,
 		    graph_menu  = GraphMenu,
 		    vertex_ctrl_menu = VertexCtrlMenu,
 		    vertex_alt_menu  = VertexAltMenu,
 		    edge_ctrl_menu   = EdgeCtrlMenu,
-		    graph = G
+		    graph = G,
+		    label_font = LabelFont,
+		    label_font_color = LabelFontColor,
+		    label_background_color = LabelBgColor
 		  },
     {ok, State}.
 
@@ -271,7 +289,7 @@ handle_call({load,File}, _From, State) ->
     case graph:load(File) of
 	Error = {error,_Reason} ->
 	    {reply, Error, State};
-	G ->
+	{ok,G} ->
 	    epxw:invalidate(),
 	    {reply, ok, State#state { graph = G, 
 				      clip = undefined,
@@ -300,7 +318,7 @@ handle_call({load_mac,File}, _From, State) ->
 	Error = {error,_Reason} ->
 	    {reply, Error, State};
 	{ok,GraphData} ->
-	    {G,Selected} = macgraph:import(GraphData),
+	    {G,Selected} = graph_mac:import(GraphData),
 	    epxw:invalidate(),
 	    {reply, ok, State#state { graph = G, 
 				      clip = undefined,
@@ -650,6 +668,16 @@ command_(Command, Mod, Selected, State) when Command >= $0, Command =< $9,
 					     Mod#keymod.alt ->
     G = set_vertices(Selected, [{shape,shape(Command-$0)}],State#state.graph),
     State#state { graph=G };
+command_($1, _Mod, Selected, State) ->
+    {G1, Sig} = graph_iso:fan_class1(State#state.graph),
+    %% io:format("Signature = ~w\n", [Sig]),
+    State#state { graph = G1 };
+command_($2, _Mod, Selected, State) ->
+    {G1, _Sig1} = graph_iso:fan_class1(State#state.graph),
+    {G2, Sig2} = graph_iso:fan_class2(G1),
+    %% io:format("Signature2 = ~w\n", [Sig2]),
+    State#state { graph = G2};
+
 command_($\b, _Mod, Selected, State) ->
     G = kill_graph(Selected, State#state.graph),
     State#state { graph=G, selected = [] };
@@ -970,6 +998,9 @@ vertex_rect(V, G) ->
 vertex_shape(V, G) ->
     graph:get_vertex_by_id(V, shape, G, ellipse).
 
+vertex_label(V, G) ->
+    graph:get_vertex_by_id(V, label, G, "").
+
 rect_overlap(R1,R2) ->
     case epx_rect:intersect(R1, R2) of
 	{_,_,0,0} -> false;
@@ -1032,18 +1063,26 @@ draw(Pixels, _Dirty, State = #state { graph = G, selected = Selected,
     VertexBorderColor = epx_profile:color(Scheme,Profile#profile.vertex_border_color),
     VertexHighLightColor = epx_profile:color(Scheme, Profile#profile.vertex_highlight_color),
     VertexHighLightBorderColor = epx_profile:color(Scheme, Profile#profile.vertex_highlight_border_color),
+
+    LabelFontColor =
+	parse_color(epx_profile:color(Scheme,
+				      Profile#profile.label_font_color)),
+    LabelBgColor =
+	parse_color(epx_profile:color(Scheme,
+				      Profile#profile.label_background_color)),
+
     graph:fold_vertices(
       fun(V, Acc) ->
+	      IsSelected = lists:member(V, Selected),
 	      Rect0 = vertex_rect(V, G),
 	      Rect1 = 
-		  case lists:member(V, Selected) of
-		      true ->
+		  if IsSelected ->
 			  %% scale me!
 			  Bw1 = Profile#profile.vertex_select_border_width,
 			  epx_gc:set_border_width(Bw1),
 			  epx_gc:set_border_color(VertexSelectBorderColor),
 			  rect_offset(Rect0, Offset);
-		      false ->
+		     true ->
 			  %% scale me!
 			  Bw2 = Profile#profile.vertex_border_width,
 			  epx_gc:set_border_width(Bw2),
@@ -1051,7 +1090,7 @@ draw(Pixels, _Dirty, State = #state { graph = G, selected = Selected,
 			  Rect0
 		  end,
 	      Rect2 = snap(Rect1, Grid),
-	      Rect  = Rect2,
+	      Rect = Rect2,
 	      %% high light vertext under pt2
 	      if State#state.operation =:= edge ->
 		      %% check with snap?
@@ -1090,6 +1129,15 @@ draw(Pixels, _Dirty, State = #state { graph = G, selected = Selected,
 		      P1 = {X, Y+H-1},
 		      P2 = {X+W-1, Y+H-1},
 		      epx:draw_triangle(Pixels, P0, P1, P2)
+	      end,
+	      case vertex_label(V, G) of
+		  "" -> ignore;
+		  Text ->
+		      draw_label(Pixels, Rect1, IsSelected,
+				 State#state.label_font,
+				 LabelFontColor,
+				 LabelBgColor,
+				 Text)
 	      end,
 	      Acc
       end, [], G),
@@ -1134,6 +1182,68 @@ draw(Pixels, _Dirty, State = #state { graph = G, selected = Selected,
 	    epx:draw_rectangle(Pixels, Selection)
     end,
     State.
+
+draw_label(Pixels, {X,Y,_,_}, Selected, Font, FgColor, BgColor, Text0) ->
+    Text = if is_binary(Text0) -> binary_to_list(Text0);
+	      is_list(Text0) -> Text0;
+	      is_atom(Text0) -> atom_to_list(Text0)
+	   end,
+    FColor = if Selected -> BgColor; true -> FgColor end,
+    BColor = if Selected -> FgColor; true -> BgColor end,
+    Bw = if Selected -> 2; true -> 1 end,
+    Bc = black,
+    epx_gc:set_font(Font),
+    {TxW,TxH} = epx_font:dimension(epx_gc:current(), Text),
+    Ascent = epx:font_info(Font, ascent),
+    Width = TxW + 6,
+    Height = TxH + 2,
+    set_font_color(FColor),
+    epx_gc:set_fill_color(BColor),
+    epx_gc:set_border_color(Bc),
+    epx_gc:set_border_width(Bw),
+    TextRect = {X-Width-2, Y-Height-2, Width+4, Height+4},
+    epx:draw_rectangle(Pixels, TextRect),
+    draw_text(Pixels,Ascent,Text,TxW,TxH,TextRect,center,center).
+
+draw_text(Pixels,Ascent,Text,TxW,TxH,TextRect,Halign,Valign) ->
+    {X,Y,Width,Height} = TextRect,
+    Xd = case Halign of
+	     left  -> 0;
+	     right -> Width - TxW;
+	     center -> (Width-TxW) div 2
+	 end,
+    Yd = case Valign of
+	     top -> 0;
+	     bottom -> Height - TxH;
+	     center -> (Height-TxH) div 2
+	 end,
+    %% draw aligned text
+    X1 = X + Xd,
+    Y1 = Y + Yd + Ascent,
+    epx:draw_string(Pixels,X1,Y1,Text).
+
+set_font_color(Color) ->
+    epx_gc:set_foreground_color(Color band 16#ffffff).
+
+parse_color(Color) when is_integer(Color) ->
+    Color band 16#ffffffff;
+parse_color({R,G,B}) when is_integer(R), is_integer(G), is_integer(B) ->
+    %% fixme clamp R,G,B instead of band?
+    (16#ff bsl 24) bor ((R band 16#ff) bsl 16)
+	bor ((G band 16#ff) bsl 8) bor (B band 16#ff);
+parse_color({A,R,G,B}) when is_integer(A),is_integer(R),
+			    is_integer(G), is_integer(B) ->
+    %% fixme clamp A,R,G,B instead of band?
+    ((A band 16#ff) bsl 24) bor ((R band 16#ff) bsl 16)
+	bor ((G band 16#ff) bsl 8) bor (B band 16#ff);
+parse_color(Name) when is_list(Name); is_atom(Name) ->
+    case epx_color:from_name(Name) of
+	false ->
+	    ?error("no such color ~s\n", [Name]),
+	    false;
+	{R,G,B} ->
+	    (16#ff bsl 24)+(R bsl 16)+(G bsl 8)+B
+    end.
 
 snap(PointOrRect, undefined) -> PointOrRect;
 snap({X,Y}, {Xs, Ys}) ->

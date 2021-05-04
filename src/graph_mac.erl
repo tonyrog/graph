@@ -159,7 +159,7 @@ decode_(Other, Acc) ->
     {lists:reverse(Acc), Other}.
 
 import({#graph_data{nVertices=_Nv,nEdges=_Ne},Elements,_Tail}) ->
-    import(Elements, graph:new(), [], #{}).
+    import(Elements, graph:new(false), [], #{}).
 
 import([{node,Name,GD,VD,ND}|Es], G, Selected, Vmap) ->
     V = graph:unique_vertex(),
